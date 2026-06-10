@@ -21,51 +21,67 @@ don't sink more weeks.
 - [x] Input: virtual joystick + WASD; WebAudio sfx; procedural art; 14 unit tests
 - [x] Verified end-to-end in browser via `window.__game` automation
 
-## Phase 1 — Make the loop juicier (next session, ~1 day)
+## Status — Studio-grade visual + juice pass (2026-06-10)
 
-Goal: the moment-to-moment feel. Do these in order.
+- [x] BootScene rewritten: shaded/rim-lit/gradient procedural textures — vendor mascot,
+  shaded customers, per-dish food tokens (`food_skewer`/`food_noodle`/`food_tea`, full
+  colour, not tinted — set via `StallDef.foodTex`), glossy coin, coal-bed grill,
+  wood-grain counter, scalloped awning, paper `lantern`, plus `spark`/`steam` particles.
+- [x] Effects layer (`src/fx.ts`): WebGL camera bloom + vignette (Canvas-safe guard),
+  grill ember fire + steam emitters per stall, drifting ambient fireflies, cash-pile
+  sparkle bursts, floating `+฿N` on collect, camera punch on big scoops, money-pill bounce.
+- [x] Phase 1 #1 **customer patience** DONE — shrinking bar over queued customers (25s,
+  `PATIENCE_MS`), storms off with 💢 + red flash + deny sfx when empty (no more deadlock
+  when a stall is out of stock). Wired through `Stall.tickPatience`/`reflowQueue` +
+  `Customer.arriveAtSlot`/`tickPatience`/`loseTemper`.
+- [x] Phase 1 #2 **money feel** DONE — float `+฿N`, pile sparkle, money-pill bounce,
+  growing-pile coin pulse.
 
-1. **Customer patience** — patience bar over queued customers (~25s, shrinks; leaves
-   angry 💢 if it empties, with a small "lost sale" sting). Accept: queues no longer
-   deadlock when a stall has no stock; losing customers is visible and felt.
-2. **Money feel** — pile coins should pulse/sparkle when value grows; collected amount
-   floats up as `+฿N` text. Accept: collecting cash is the best-feeling action in the game.
-3. **Stats for tuning** — track `totalServed`, `totalEarned`, session ฿/min; show in a
-   small debug overlay toggled by tapping the title. Accept: you can measure whether a
-   balance change helped.
-4. **Balance pass** — with patience on, verify a fresh save can unlock Pad Thai in
-   ≤4 min of active play and Thai Tea in ≤10. Adjust `config.ts` costs/prices only.
+## Phase 1 — Make the loop juicier — ✅ DONE
 
-## Phase 2 — Meta layer / hybridcasual (the retention bet, ~2 days)
+1. ~~**Customer patience**~~ — DONE.
+2. ~~**Money feel**~~ — DONE (sparkle + float `+฿N` + pile pulse + pill bounce).
+3. ~~**Stats for tuning**~~ — DONE. `totalServed`/`totalEarned`/`streak`/`prestige` in save;
+   session ฿/min computed live; overlay toggled by tapping the title (emits `toggle-stats`).
+4. ~~**Balance pass**~~ — GUARDED. `economy.test.ts` "balance targets" encodes the
+   spec (Pad Thai ≤4 min, Thai Tea ≤10 min) via cook-limited `ratePerSecond` × realistic
+   solo-play overhead (0.6 / 0.55). Current config passes (~3.3 min / ~8.25 min modelled).
+   The test fails if costs/prices/cook-times regress. Still worth a real human playtest to
+   confirm the *feel*, but the numbers are no longer a blind guess.
 
-5. **Stall 4 + 5: Som Tam (฿3,000), Moo Krata (฿8,000)** — requires making the world
-   taller than the viewport: switch camera to follow the player
-   (`this.cameras.main.startFollow`), extend lane, keep UIScene fixed. This is the
-   biggest refactor in the plan — do it before adding the stalls themselves.
-6. **Daily streak** — on first open per calendar day: streak counter + escalating bonus
-   (฿ scaled to current earning rate, day 7 cap). Store `lastDailyClaim`, `streak` in save.
-7. **Menu collection book** 📖 — every N sales of a dish earns a star (max 3);
-   each star = permanent +10% price for that stall. Simple modal listing stalls/stars.
-   This is the long-tail retention hook.
-8. **Prestige (only if 5–7 land well)** — "Move to the Floating Market": reset stalls,
-   keep collection book, +25% permanent multiplier per prestige.
+## Phase 2 — Meta layer / hybridcasual — ✅ DONE
 
-## Phase 3 — Monetization scaffolding (before any store talk)
+5. ~~**Camera follow + Stalls 4 & 5**~~ — DONE. `WORLD_H = 1640` (> viewport); camera
+   `startFollow` + bounds + deadzone; joystick sprites `scrollFactor(0)`; UIScene fixed.
+   Som Tam + Moo Krata added with `food_somtam`/`food_krata` textures.
+6. ~~**Daily streak**~~ — DONE. `streakForToday`/`dailyReward` (pure, tested); 7-day modal
+   on first open per local day; reward scales with `ratePerSecond`, day-7 cap, ฿40×day floor.
+7. ~~**Menu collection book** 📖~~ — DONE. Stars at 40/160/480 lifetime sales (`STAR_SALES`),
+   +10%/star permanent price (`effectivePrice`). 📖 HUD button opens the modal.
+8. ~~**Prestige**~~ — DONE. "Move to the Floating Market" (confirm modal in the book):
+   resets stalls/upgrades, keeps stars, +25%/prestige (`PRESTIGE_BONUS`); `scene.restart()`.
 
-9. **`AdProvider` interface** with a mock implementation (button → 3s fake countdown →
-   reward). Placements: 2× earnings for 4h (HUD button), instant-fill grill (button at
-   stall), double offline earnings (on the welcome-back toast). Real SDK comes only
-   after the game is wrapped; the interface keeps it swappable.
-10. **Analytics events interface** — `track(event, props)` logging to console for now:
-    session_start, unlock, upgrade, ad_watched, prestige. These define the funnel later.
+## Phase 3 — Monetization scaffolding — ✅ DONE
+
+9. ~~**`AdProvider` interface** + `MockAdProvider`~~ — DONE (`src/ads.ts`). 3s countdown
+   overlay in UIScene. Placements wired: 2× earnings/4h (📺 HUD), instant-fill grills
+   (stall panel), double offline (welcome-back modal). Swap the mock for a real SDK later.
+10. ~~**Analytics**~~ — DONE (`src/analytics.ts`). `track(event, props)` → console:
+    session_start, unlock, upgrade, ad_watched, prestige, daily_claim, star_earned.
 
 ## Phase 4 — Ship as app
 
-11. **PWA** — mirror block-puzzle's `vite-plugin-pwa` + icon generation (sharp script);
-    theme: dark navy `#0b0d22` + lantern gold.
-12. **Capacitor wrap** — copy block-puzzle's `capacitor.config.ts` approach.
-13. Store assets: the unlock-lighting moment is the 3-second ad clip — design the
-    screenshot/video flow around it.
+11. ~~**PWA**~~ — DONE. `vite-plugin-pwa` (autoUpdate SW, fullscreen/portrait, navy+gold
+    manifest). Icons generated procedurally: `npm run icons` → `scripts/generate-icons.mjs`
+    (sharp rasterises an inline lantern SVG → `public/pwa-{192,512}.png`, maskable, apple-touch).
+12. ~~**Capacitor wrap**~~ — SCAFFOLDED. `@capacitor/{core,cli,ios,android}` installed,
+    `capacitor.config.ts` (appId `com.nightmarket.ready`, webDir `dist`, navy bg), scripts
+    `cap:sync`/`cap:ios`/`cap:android`. Remaining (needs Xcode / Android Studio, not in this
+    environment): `npm run build` → `npx cap add ios && npx cap add android` → `npm run cap:sync`
+    → open the native project and build/sign. CocoaPods required for iOS.
+13. **Store assets** — STILL OPEN (design task; produces binaries). The unlock-lighting +
+    "MARKET FULLY LIT" celebration is the 3-second clip; build the screenshot/video flow
+    around it. Tip: `take_screenshot` against `window.__game` can capture marketing frames.
 
 ## Explicitly out of scope (don't build without a new decision)
 

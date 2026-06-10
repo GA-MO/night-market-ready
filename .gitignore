@@ -1,4 +1,14 @@
 node_modules
 dist
+dev-dist
 .DS_Store
 *.local
+
+# Generated PWA icons — rebuilt in CI / locally via `npm run icons`
+public/pwa-*.png
+public/maskable-*.png
+public/apple-touch-icon.png
+
+# Capacitor native projects (created with `npx cap add`)
+/ios
+/android

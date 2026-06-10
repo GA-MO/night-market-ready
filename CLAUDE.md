@@ -10,19 +10,23 @@ acceptance criteria and the current status.
 ## Commands
 
 - `npm run dev` — dev server at http://localhost:5174
-- `npm run build` — typecheck + production build (run before committing)
+- `npm run build` — typecheck + production build incl. PWA manifest/SW (run before committing)
 - `npm test` — vitest (economy + save); keep pure logic in `economy.ts`/`save.ts` so it stays testable
 - `npm run typecheck`
+- `npm run icons` — regenerate PWA icons procedurally (`scripts/generate-icons.mjs`, sharp → `public/`)
 
 ## Architecture (one file per concern — keep it that way)
 
-- `src/config.ts` — stall defs + tuning constants (positions, prices, costs)
-- `src/economy.ts` — pure balance math, no Phaser imports, unit-tested
+- `src/config.ts` — stall defs (5) + tuning constants (positions, prices, costs); `WORLD_H` (taller than viewport), `STAR_SALES`, `PRESTIGE_BONUS`, `PATIENCE_MS`
+- `src/economy.ts` — pure balance math, no Phaser imports, unit-tested (incl. stars/prestige/daily)
 - `src/save.ts` — localStorage persistence; forward-compatible merge in `loadState` (old saves must keep working — add new fields to `defaultState` and merge)
-- `src/scenes/BootScene.ts` — all texture generation
-- `src/scenes/GameScene.ts` — world, input (WASD + virtual joystick), spawning, purchases; talks to UIScene only via `this.events` (`money`, `state-changed`, `stall-tapped`, `toast`, `celebrate`)
-- `src/scenes/UIScene.ts` — HUD, upgrade buttons, stall panel, toasts
-- `src/entities/Stall.ts` — cooking, queue, cash pile; `Player`, `Customer`, `Worker`
+- `src/fx.ts` — reusable juice: camera bloom+vignette (WebGL-guarded), fire/steam/sparkle emitters, fireflies, floating `+฿N`, camera punch
+- `src/ads.ts` — `AdProvider` interface + `MockAdProvider` (3s countdown); swap for a real SDK later
+- `src/analytics.ts` — `track(event, props)` console funnel
+- `src/scenes/BootScene.ts` — all texture generation (shaded/gradient procedural sprites + food-per-dish)
+- `src/scenes/GameScene.ts` — world, camera-follow down a tall lane, input (WASD + joystick w/ `scrollFactor 0`), spawning, purchases, stats, daily, ads, prestige; talks to UIScene via `this.events` (`money`, `state-changed`, `stall-tapped`, `toast`, `celebrate`, `toggle-stats`, `daily-available`, `offline-earned`, `world-reset`)
+- `src/scenes/UIScene.ts` — HUD (money pill, 📖 book, 📺 boost), upgrade bar, stall panel, stats overlay, daily/welcome-back/book/prestige modals, ad countdown overlay, toasts
+- `src/entities/Stall.ts` — cooking, queue+patience, cash pile, sales→stars, `unitPrice`; `Player`, `Customer`, `Worker`
 
 ## Verifying changes (do this, not just typecheck)
 

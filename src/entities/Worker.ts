@@ -16,9 +16,9 @@ export class Worker {
     private scene: Phaser.Scene,
     private stall: Stall,
   ) {
-    const shadow = scene.add.ellipse(0, 13, 26, 9, 0x000000, 0.3);
-    const body = scene.add.sprite(0, 0, "npc").setTint(stall.def.color);
-    const hat = scene.add.sprite(0, -13, "dot").setScale(0.7).setTint(0xffffff);
+    const shadow = scene.add.ellipse(0, 15, 28, 10, 0x000000, 0.3);
+    const body = scene.add.sprite(0, 0, "npc").setTint(stall.def.color).setScale(0.86);
+    const hat = scene.add.sprite(0, -17, "dot").setScale(0.7).setTint(0xffffff);
     this.obj = scene.add.container(stall.grillPos.x, stall.grillPos.y + 42, [shadow, body, hat]);
     this.obj.setDepth(this.obj.y);
     this.obj.setScale(0);
@@ -59,7 +59,7 @@ export class Worker {
   }
 
   private addCarried(): void {
-    const item = this.scene.add.sprite(0, 0, "food").setTint(this.stall.def.foodColor);
+    const item = this.scene.add.sprite(0, 0, this.stall.def.foodTex).setScale(0.9);
     this.obj.add(item);
     this.carried.push(item);
     this.carried.forEach((s, i) => s.setPosition(0, STACK_BASE_Y - i * STACK_STEP));

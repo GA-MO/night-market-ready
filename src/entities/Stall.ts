@@ -1,8 +1,9 @@
 import Phaser from "phaser";
-import { COUNTER_MAX, GAME_H, GAME_W, GRILL_MAX, QUEUE_MAX, StallDef } from "../config";
-import { cookMs } from "../economy";
+import { COUNTER_MAX, GAME_W, GRILL_MAX, QUEUE_MAX, StallDef, WORLD_H } from "../config";
+import { cookMs, effectivePrice, starsFromSales } from "../economy";
 import type { StallState } from "../save";
 import { sfx } from "../audio";
+import { grillFire, lostSaleSting, makeSparkles, steamPlume } from "../fx";
 import { Customer } from "./Customer";
 import { Worker } from "./Worker";
 
@@ -24,7 +25,11 @@ export class Stall {
   counterStock = 0;
   pileValue = 0;
   queue: Customer[] = [];
+  /** Per-sale payout after stars + prestige; refreshed via {@link setPrice}. */
+  unitPrice: number;
   onTapped: () => void = () => {};
+  onServe: () => void = () => {};
+  onStar: (stall: Stall, stars: number) => void = () => {};
 
   private worker: Worker | null = null;
   private cookProgress = 0;
@@ -35,9 +40,15 @@ export class Stall {
   private liveGroup!: Phaser.GameObjects.Container;
   private lockGroup: Phaser.GameObjects.Container | null = null;
   private progressBar!: Phaser.GameObjects.Graphics;
+  private pileMarker!: Phaser.GameObjects.Sprite;
   private lights: Phaser.GameObjects.Sprite[] = [];
   private glow!: Phaser.GameObjects.Sprite;
   private lightsAnimated = false;
+  private fire: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
+  private sparkles: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
+
+  /** Lost-sale signal for GameScene to play feedback (read + cleared each frame). */
+  lostSales = 0;
 
   constructor(
     private scene: Phaser.Scene,
@@ -46,6 +57,7 @@ export class Stall {
   ) {
     this.def = def;
     this.state = state;
+    this.unitPrice = effectivePrice(def.price, state.stars, 0);
     const left = def.side === "left";
     this.dir = left ? 1 : -1;
     this.cx = left ? 165 : GAME_W - 165;
@@ -74,7 +86,7 @@ export class Stall {
     const awningBase = this.scene.add.sprite(cx, awningY, "awning_base").setTint(0xf4f1ea);
     const awningStripes = this.scene.add.sprite(cx, awningY, "awning_stripes").setTint(def.color);
     const name = this.scene.add
-      .text(cx, awningY, `${def.emoji} ${def.name}`, {
+      .text(cx, awningY - 6, `${def.emoji} ${def.name}`, {
         fontFamily: "Arial, sans-serif",
         fontSize: "23px",
         fontStyle: "bold",
@@ -86,11 +98,14 @@ export class Stall {
     const counter = this.scene.add.sprite(this.counterPos.x, this.counterPos.y, "counter");
     this.progressBar = this.scene.add.graphics();
 
-    const pileMarker = this.scene.add
+    this.pileMarker = this.scene.add
       .sprite(this.pilePos.x, this.pilePos.y, "glow")
       .setScale(0.55)
       .setAlpha(0.3)
       .setTint(0xffd23f);
+    const pileMarker = this.pileMarker;
+
+    this.sparkles = makeSparkles(this.scene, this.pilePos.x, this.pilePos.y, def.y + 90);
 
     this.glow = this.scene.add
       .sprite(cx, def.y, "glow")
@@ -159,6 +174,11 @@ export class Stall {
     this.lockGroup?.destroy();
     this.lockGroup = null;
     this.glow.setVisible(true);
+
+    if (!this.fire) {
+      this.fire = grillFire(this.scene, this.grillPos.x, this.grillPos.y + 4, this.def.y - 120);
+      steamPlume(this.scene, this.grillPos.x, this.grillPos.y - 16, this.def.y - 110);
+    }
     if (animate) {
       this.scene.tweens.add({ targets: this.liveGroup, alpha: 1, duration: 450 });
       const confetti = this.scene.add.particles(this.cx, this.def.y, "dot", {
@@ -193,6 +213,11 @@ export class Stall {
     }
   }
 
+  /** Recompute the per-sale payout (call after a star is earned or after prestige). */
+  setPrice(prestige: number): void {
+    this.unitPrice = effectivePrice(this.def.price, this.state.stars, prestige);
+  }
+
   ensureWorker(): void {
     if (this.state.workerLvl > 0 && !this.worker) {
       this.worker = new Worker(this.scene, this);
@@ -220,7 +245,37 @@ export class Stall {
     this.serveCooldown -= dt;
     if (this.serveCooldown <= 0) this.tryServe();
 
+    this.tickPatience(dt);
     this.worker?.update();
+  }
+
+  /** Drain queued customers' patience; the impatient storm off (prevents deadlock). */
+  private tickPatience(dt: number): void {
+    let stormedOff = false;
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const c = this.queue[i];
+      if (c.tickPatience(dt)) {
+        this.queue.splice(i, 1);
+        c.loseTemper(360, WORLD_H + 60);
+        this.lostSales++;
+        stormedOff = true;
+      }
+    }
+    if (stormedOff) {
+      this.reflowQueue();
+      lostSaleSting(this.scene);
+      sfx.deny();
+    }
+  }
+
+  /** Re-index the queue and walk everyone to their (new) slot. */
+  private reflowQueue(): void {
+    this.queue.forEach((c, i) => {
+      c.queueIndex = i;
+      c.atSlot = false;
+      const slot = this.queueSlot(i);
+      c.walkTo(slot.x, slot.y, 150, () => c.arriveAtSlot());
+    });
   }
 
   private tryServe(): void {
@@ -228,19 +283,20 @@ export class Stall {
     if (!front || !front.atSlot || this.counterStock <= 0) return;
     this.counterStock--;
     this.refreshCounter();
-    this.addToPile(this.def.price);
+    this.addToPile(this.unitPrice);
     this.serveCooldown = 350;
     sfx.serve();
-    front.served(360, GAME_H + 60);
+    front.served(360, WORLD_H + 60);
     this.queue.shift();
-    this.queue.forEach((c, i) => {
-      c.queueIndex = i;
-      c.atSlot = false;
-      const slot = this.queueSlot(i);
-      c.walkTo(slot.x, slot.y, 150, () => {
-        c.atSlot = true;
-      });
-    });
+    this.reflowQueue();
+
+    this.state.sales++;
+    this.onServe();
+    const stars = starsFromSales(this.state.sales);
+    if (stars > this.state.stars) {
+      this.state.stars = stars;
+      this.onStar(this, stars);
+    }
   }
 
   join(c: Customer): number {
@@ -252,6 +308,12 @@ export class Stall {
 
   queueSlot(i: number): Phaser.Math.Vector2 {
     return new Phaser.Math.Vector2(this.counterPos.x + this.dir * (60 + i * 50), this.def.y + 16);
+  }
+
+  /** Reward hook: top the grill straight to full. */
+  fillGrill(): void {
+    this.grillStock = GRILL_MAX;
+    this.refreshGrill();
   }
 
   takeFromGrill(n: number): number {
@@ -270,6 +332,22 @@ export class Stall {
 
   addToPile(amount: number): void {
     this.pileValue += amount;
+    this.sparkles?.explode(3, this.pilePos.x, this.pilePos.y);
+    // Pulse the pile so a growing stack of cash reads as "worth grabbing".
+    this.scene.tweens.killTweensOf(this.pileMarker);
+    this.pileMarker.setScale(0.78).setAlpha(0.55);
+    this.scene.tweens.add({
+      targets: this.pileMarker,
+      scale: 0.55,
+      alpha: 0.3,
+      duration: 300,
+      ease: "Quad.Out",
+    });
+    for (const coin of this.pileCoins) {
+      this.scene.tweens.killTweensOf(coin);
+      coin.setScale(1.25);
+      this.scene.tweens.add({ targets: coin, scale: 1, duration: 220, ease: "Back.Out" });
+    }
     if (this.pileCoins.length < 12) {
       const coin = this.scene.add
         .sprite(
@@ -332,11 +410,10 @@ export class Stall {
       const i = list.length;
       const p = pos(i);
       const s = this.scene.add
-        .sprite(p.x, p.y, "food")
-        .setTint(this.def.foodColor)
+        .sprite(p.x, p.y, this.def.foodTex)
         .setDepth(this.def.y - 100)
-        .setScale(1.4);
-      this.scene.tweens.add({ targets: s, scale: 1, duration: 120 });
+        .setScale(1.7);
+      this.scene.tweens.add({ targets: s, scale: 1.1, duration: 120, ease: "Back.Out" });
       list.push(s);
     }
   }

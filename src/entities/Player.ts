@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { WORLD_H } from "../config";
 import { carryCap } from "../economy";
 
 const STACK_BASE_Y = -40;
@@ -34,7 +35,7 @@ export class Player {
       vy /= len;
     }
     this.obj.x = Phaser.Math.Clamp(this.obj.x + vx * speed * dtSec, 70, 650);
-    this.obj.y = Phaser.Math.Clamp(this.obj.y + vy * speed * dtSec, 200, 1180);
+    this.obj.y = Phaser.Math.Clamp(this.obj.y + vy * speed * dtSec, 200, WORLD_H - 90);
     this.obj.setDepth(this.obj.y);
   }
 
@@ -42,14 +43,14 @@ export class Player {
     return carryCap(carryLvl) - this.carried.length;
   }
 
-  addItem(stallId: string, tint: number): void {
-    const item = this.scene.add.sprite(0, 0, "food").setTint(tint);
+  addItem(stallId: string, tex: string): void {
+    const item = this.scene.add.sprite(0, 0, tex);
     item.setData("stallId", stallId);
     this.obj.add(item);
     this.carried.push(item);
     this.restack();
-    item.setScale(1.5);
-    this.scene.tweens.add({ targets: item, scale: 1, duration: 130, ease: "Back.Out" });
+    item.setScale(1.6);
+    this.scene.tweens.add({ targets: item, scale: 1.1, duration: 130, ease: "Back.Out" });
   }
 
   /** Remove up to `max` carried items belonging to a stall; returns how many were removed. */

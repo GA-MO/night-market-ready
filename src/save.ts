@@ -4,6 +4,10 @@ export interface StallState {
   unlocked: boolean;
   cookLvl: number;
   workerLvl: number;
+  /** Lifetime sales of this dish (drives collection-book stars). */
+  sales: number;
+  /** Earned collection-book stars (0–3); each grants a permanent price bonus. */
+  stars: number;
 }
 
 export interface SaveState {
@@ -12,16 +16,40 @@ export interface SaveState {
   speedLvl: number;
   stalls: Record<string, StallState>;
   lastSeen: number;
+  // --- meta layer ---
+  totalServed: number;
+  totalEarned: number;
+  /** Consecutive days opened; reset if a day is skipped. */
+  streak: number;
+  /** Local calendar day of the last claimed daily bonus, e.g. "2026-06-10". */
+  lastDailyClaim: string;
+  /** Times the player has prestiged ("moved to the Floating Market"). */
+  prestige: number;
 }
 
 const KEY = "nmr-save-v1";
 
+function defaultStall(unlocked: boolean): StallState {
+  return { unlocked, cookLvl: 0, workerLvl: 0, sales: 0, stars: 0 };
+}
+
 export function defaultState(): SaveState {
   const stalls: Record<string, StallState> = {};
   for (const s of STALLS) {
-    stalls[s.id] = { unlocked: s.unlockCost === 0, cookLvl: 0, workerLvl: 0 };
+    stalls[s.id] = defaultStall(s.unlockCost === 0);
   }
-  return { money: 0, carryLvl: 0, speedLvl: 0, stalls, lastSeen: Date.now() };
+  return {
+    money: 0,
+    carryLvl: 0,
+    speedLvl: 0,
+    stalls,
+    lastSeen: Date.now(),
+    totalServed: 0,
+    totalEarned: 0,
+    streak: 0,
+    lastDailyClaim: "",
+    prestige: 0,
+  };
 }
 
 export function loadState(storage: Storage = localStorage): SaveState {

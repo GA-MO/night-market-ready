@@ -1,18 +1,39 @@
 import Phaser from "phaser";
-import { COUNTER_MAX, ENTRANCE, GAME_H, GAME_W, LANE_X, MAX_CUSTOMERS, QUEUE_MAX, STALLS } from "../config";
+import {
+  COUNTER_MAX,
+  ENTRANCE,
+  GAME_W,
+  LANE_X,
+  MAX_CUSTOMERS,
+  QUEUE_MAX,
+  STALLS,
+  WORLD_H,
+} from "../config";
 import {
   CAPS,
   CARRY_COST_BASE,
   SPEED_COST_BASE,
+  dailyReward,
+  effectivePrice,
   moveSpeed,
   offlineEarnings,
+  ratePerSecond,
+  streakForToday,
   upgradeCost,
 } from "../economy";
 import { loadState, saveState, SaveState } from "../save";
 import { sfx } from "../audio";
+import { ambientFireflies, applyCameraFx, collectPunch, floatMoney } from "../fx";
+import { track } from "../analytics";
+import { AdProvider, MockAdProvider } from "../ads";
 import { Player } from "../entities/Player";
 import { Stall } from "../entities/Stall";
 import { Customer } from "../entities/Customer";
+
+/** Local calendar day as YYYY-MM-DD (for daily-streak comparisons). */
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 const NPC_TINTS = [
   0xf94144, 0xf3722c, 0xf8961e, 0xf9c74f, 0x90be6d, 0x43aa8b, 0x577590, 0xff70a6, 0x70d6ff,
@@ -23,9 +44,15 @@ const JOY_RADIUS = 64;
 export class GameScene extends Phaser.Scene {
   state!: SaveState;
   stalls: Stall[] = [];
+  readonly ads: AdProvider = new MockAdProvider();
+  /** Offline ฿ granted on this load — used by the "double it" ad reward. */
+  lastOfflineEarned = 0;
 
-  private player!: Player;
+  player!: Player;
   private customers: Customer[] = [];
+  private sessionStartMs = 0;
+  private sessionStartEarned = 0;
+  private earnBoostUntil = 0;
   private spawnAcc = 0;
   private actionAcc = 0;
   private saveAcc = 0;
@@ -46,17 +73,33 @@ export class GameScene extends Phaser.Scene {
     this.stalls = [];
     this.customers = [];
 
+    this.sessionStartMs = this.time.now;
+    this.sessionStartEarned = this.state.totalEarned;
+
     this.drawAmbient();
 
     for (const def of STALLS) {
       const stall = new Stall(this, def, this.state.stalls[def.id]);
+      stall.setPrice(this.state.prestige);
       stall.onTapped = () => this.stallTapped(stall);
+      stall.onServe = () => {
+        this.state.totalServed++;
+      };
+      stall.onStar = (s, stars) => this.onStarEarned(s, stars);
       stall.ensureWorker();
       this.stalls.push(stall);
     }
-    this.player = new Player(this, LANE_X, 980);
+    this.player = new Player(this, LANE_X, 480);
 
     this.setupInput();
+
+    // World is taller than the viewport — follow the player down the market lane.
+    this.cameras.main.setBounds(0, 0, GAME_W, WORLD_H);
+    this.cameras.main.startFollow(this.player.obj, true, 0.08, 0.08);
+    this.cameras.main.setDeadzone(GAME_W, 260);
+
+    applyCameraFx(this);
+    ambientFireflies(this, 20);
 
     const persist = () => saveState(this.state);
     window.addEventListener("pagehide", persist);
@@ -64,7 +107,14 @@ export class GameScene extends Phaser.Scene {
       window.removeEventListener("pagehide", persist),
     );
 
+    track("session_start", { prestige: this.state.prestige, money: this.state.money });
     this.grantOfflineEarnings();
+    this.checkDailyStreak();
+
+    // Sync the HUD (matters after a prestige scene restart — UIScene stays alive).
+    this.events.emit("money", this.state.money);
+    this.events.emit("world-reset");
+    this.events.emit("state-changed");
   }
 
   update(_time: number, delta: number): void {
@@ -104,6 +154,13 @@ export class GameScene extends Phaser.Scene {
       this.saveAcc = 0;
       saveState(this.state);
     }
+
+    if (this.earnBoostUntil > 0 && Date.now() >= this.earnBoostUntil) {
+      this.earnBoostUntil = 0;
+      this.refreshPrices();
+      this.events.emit("toast", "2× earnings boost ended.");
+      this.events.emit("state-changed");
+    }
   }
 
   // ---------- economy actions (called from UIScene) ----------
@@ -139,6 +196,7 @@ export class GameScene extends Phaser.Scene {
 
   private afterPurchase(): void {
     sfx.upgrade();
+    track("upgrade", { money: this.state.money });
     saveState(this.state);
     this.events.emit("state-changed");
   }
@@ -155,6 +213,7 @@ export class GameScene extends Phaser.Scene {
 
   private addMoney(n: number): void {
     this.state.money += n;
+    if (n > 0) this.state.totalEarned += n;
     this.events.emit("money", this.state.money);
   }
 
@@ -162,6 +221,7 @@ export class GameScene extends Phaser.Scene {
     if (!stall.state.unlocked) {
       if (this.spend(stall.def.unlockCost)) {
         stall.setUnlocked(true);
+        track("unlock", { stall: stall.def.id, cost: stall.def.unlockCost });
         saveState(this.state);
         this.events.emit("state-changed");
         if (this.stalls.every((s) => s.state.unlocked)) {
@@ -188,7 +248,7 @@ export class GameScene extends Phaser.Scene {
         p.room(this.state.carryLvl) > 0
       ) {
         stall.takeFromGrill(1);
-        p.addItem(stall.def.id, stall.def.foodColor);
+        p.addItem(stall.def.id, stall.def.foodTex);
         sfx.pickup();
       }
 
@@ -207,6 +267,8 @@ export class GameScene extends Phaser.Scene {
       ) {
         const amount = stall.collectPile(p.x, p.y);
         this.addMoney(amount);
+        floatMoney(this, stall.pilePos.x, stall.pilePos.y - 10, amount);
+        if (amount >= 60) collectPunch(this);
         sfx.coin();
       }
     }
@@ -222,45 +284,158 @@ export class GameScene extends Phaser.Scene {
     const c = new Customer(
       this,
       ENTRANCE.x + Phaser.Math.Between(-40, 40),
-      GAME_H + 30,
+      WORLD_H + 30,
       Phaser.Math.RND.pick(NPC_TINTS),
     );
     this.customers.push(c);
     if (stall.join(c) < 0) {
-      c.leave(ENTRANCE.x, GAME_H + 60);
+      c.leave(ENTRANCE.x, WORLD_H + 60);
       return;
     }
     const midX = LANE_X + Phaser.Math.Between(-50, 50);
     const midY = stall.def.y + 150;
     c.walkTo(midX, midY, 165, () => {
       const slot = stall.queueSlot(c.queueIndex);
-      c.walkTo(slot.x, slot.y, 165, () => {
-        c.atSlot = true;
-      });
+      c.walkTo(slot.x, slot.y, 165, () => c.arriveAtSlot());
     });
   }
 
   // ---------- setup ----------
 
+  /** Per-stall info for the pure economy helpers, with prices already raised by stars/prestige. */
+  private stallInfos() {
+    return STALLS.map((def) => {
+      const st = this.state.stalls[def.id];
+      return {
+        unlocked: st.unlocked,
+        workerLvl: st.workerLvl,
+        cookLvl: st.cookLvl,
+        price: effectivePrice(def.price, st.stars, this.state.prestige),
+        baseCookMs: def.baseCookMs,
+      };
+    });
+  }
+
+  /** Re-apply prestige + active boost to every stall's per-sale payout. */
+  private refreshPrices(): void {
+    const boost = this.earnBoostUntil > Date.now() ? 2 : 1;
+    for (const s of this.stalls) {
+      s.setPrice(this.state.prestige);
+      s.unitPrice *= boost;
+    }
+  }
+
+  private onStarEarned(stall: Stall, stars: number): void {
+    this.refreshPrices();
+    track("star_earned", { stall: stall.def.id, stars });
+    saveState(this.state);
+    this.events.emit("toast", `⭐ ${stall.def.name} hit ${stars}★ — permanent +${stars * 10}% price!`);
+    this.events.emit("state-changed");
+    sfx.unlock();
+  }
+
   private grantOfflineEarnings(): void {
     const elapsed = Date.now() - (this.state.lastSeen || Date.now());
     if (elapsed < 60_000) return;
-    const earned = offlineEarnings(
-      elapsed,
-      STALLS.map((def) => ({
-        unlocked: this.state.stalls[def.id].unlocked,
-        workerLvl: this.state.stalls[def.id].workerLvl,
-        cookLvl: this.state.stalls[def.id].cookLvl,
-        price: def.price,
-        baseCookMs: def.baseCookMs,
-      })),
-    );
+    const earned = offlineEarnings(elapsed, this.stallInfos());
     if (earned <= 0) return;
+    this.lastOfflineEarned = earned;
     this.time.delayedCall(700, () => {
       this.addMoney(earned);
-      this.events.emit("toast", `Your helpers kept selling!  +฿ ${earned.toLocaleString()}`);
       sfx.coin();
+      this.events.emit("offline-earned", earned);
     });
+  }
+
+  private checkDailyStreak(): void {
+    const today = dayKey(new Date());
+    const yesterday = dayKey(new Date(Date.now() - 86_400_000));
+    const day = streakForToday(this.state.streak, this.state.lastDailyClaim, today, yesterday);
+    if (day <= 0) return; // already claimed today
+    const reward = dailyReward(day, ratePerSecond(this.stallInfos()));
+    this.time.delayedCall(1100, () => this.events.emit("daily-available", { day, reward }));
+  }
+
+  // ---------- public API used by UIScene ----------
+
+  claimDaily(day: number, reward: number): void {
+    this.state.streak = day;
+    this.state.lastDailyClaim = dayKey(new Date());
+    this.addMoney(reward);
+    track("daily_claim", { day, reward });
+    saveState(this.state);
+    this.events.emit("state-changed");
+    sfx.coin();
+  }
+
+  sessionStats(): { served: number; earned: number; perMin: number; prestige: number; boostMin: number } {
+    const minutes = Math.max(1 / 60, (this.time.now - this.sessionStartMs) / 60_000);
+    const perMin = (this.state.totalEarned - this.sessionStartEarned) / minutes;
+    return {
+      served: this.state.totalServed,
+      earned: this.state.totalEarned,
+      perMin: Math.round(perMin),
+      prestige: this.state.prestige,
+      boostMin: this.earnBoostUntil > Date.now() ? Math.ceil((this.earnBoostUntil - Date.now()) / 60_000) : 0,
+    };
+  }
+
+  earnBoostActive(): boolean {
+    return this.earnBoostUntil > Date.now();
+  }
+
+  /** Reward: 2× earnings for 4 hours. */
+  rewardEarnBoost(): void {
+    this.earnBoostUntil = Date.now() + 4 * 3_600_000;
+    this.refreshPrices();
+    track("ad_watched", { placement: "double_earnings" });
+    this.events.emit("toast", "📺 2× earnings for 4 hours!");
+    this.events.emit("state-changed");
+  }
+
+  /** Reward: instantly fill every unlocked grill. */
+  rewardFillGrills(): void {
+    for (const s of this.stalls) {
+      if (s.state.unlocked) s.fillGrill();
+    }
+    track("ad_watched", { placement: "instant_grill" });
+    this.events.emit("toast", "📺 Grills topped up!");
+    sfx.drop();
+  }
+
+  /** Reward: double the offline earnings granted this load (one-time). */
+  rewardDoubleOffline(): void {
+    if (this.lastOfflineEarned <= 0) return;
+    const bonus = this.lastOfflineEarned;
+    this.lastOfflineEarned = 0;
+    this.addMoney(bonus);
+    track("ad_watched", { placement: "double_offline" });
+    this.events.emit("toast", `📺 Offline earnings doubled!  +฿ ${bonus.toLocaleString()}`);
+    sfx.coin();
+  }
+
+  canPrestige(): boolean {
+    return this.stalls.length > 0 && this.stalls.every((s) => s.state.unlocked);
+  }
+
+  /** "Move to the Floating Market": reset stalls/upgrades, keep the collection book, +25%. */
+  doPrestige(): void {
+    if (!this.canPrestige()) return;
+    this.state.prestige++;
+    this.state.money = 0;
+    this.state.carryLvl = 0;
+    this.state.speedLvl = 0;
+    for (const def of STALLS) {
+      const st = this.state.stalls[def.id];
+      st.unlocked = def.unlockCost === 0;
+      st.cookLvl = 0;
+      st.workerLvl = 0;
+      // sales + stars are intentionally kept (the collection book persists).
+    }
+    this.earnBoostUntil = 0;
+    track("prestige", { prestige: this.state.prestige });
+    saveState(this.state);
+    this.scene.restart();
   }
 
   private setupInput(): void {
@@ -270,16 +445,19 @@ export class GameScene extends Phaser.Scene {
       Phaser.Input.Keyboard.Key
     >;
 
+    // scrollFactor 0 keeps the joystick pinned to the screen as the camera follows.
     this.joyBaseSpr = this.add
       .sprite(0, 0, "dot")
       .setScale(5.5)
       .setAlpha(0.12)
+      .setScrollFactor(0)
       .setDepth(6000)
       .setVisible(false);
     this.joyThumbSpr = this.add
       .sprite(0, 0, "dot")
       .setScale(2.4)
       .setAlpha(0.3)
+      .setScrollFactor(0)
       .setDepth(6001)
       .setVisible(false);
 
@@ -324,12 +502,12 @@ export class GameScene extends Phaser.Scene {
   private drawAmbient(): void {
     const bg = this.add.graphics().setDepth(-1000);
     bg.fillGradientStyle(0x0a0c20, 0x0a0c20, 0x161d3c, 0x161d3c, 1);
-    bg.fillRect(0, 0, GAME_W, GAME_H);
+    bg.fillRect(0, 0, GAME_W, WORLD_H);
 
     // Stars.
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 70; i++) {
       const star = this.add
-        .sprite(Phaser.Math.Between(10, GAME_W - 10), Phaser.Math.Between(10, GAME_H - 10), "dot")
+        .sprite(Phaser.Math.Between(10, GAME_W - 10), Phaser.Math.Between(10, WORLD_H - 10), "dot")
         .setScale(Phaser.Math.FloatBetween(0.1, 0.22))
         .setAlpha(Phaser.Math.FloatBetween(0.08, 0.35))
         .setDepth(-900);
@@ -343,12 +521,22 @@ export class GameScene extends Phaser.Scene {
       });
     }
 
-    // Market lane.
+    // Market lane — wooden walkway with plank seams and a centre runner.
+    const laneX = LANE_X - 140;
+    const laneY = 150;
+    const laneW = 280;
+    const laneH = WORLD_H - laneY - 30;
     const lane = this.add.graphics().setDepth(-800);
-    lane.fillStyle(0x232746, 1);
-    lane.fillRoundedRect(LANE_X - 130, 150, 260, GAME_H - 180, 26);
-    lane.lineStyle(2, 0x33395f, 1);
-    lane.strokeRoundedRect(LANE_X - 130, 150, 260, GAME_H - 180, 26);
+    lane.fillStyle(0x20243f, 1);
+    lane.fillRoundedRect(laneX, laneY, laneW, laneH, 26);
+    lane.lineStyle(2, 0x2b3157, 0.8);
+    for (let y = laneY + 64; y < laneY + laneH; y += 66) {
+      lane.lineBetween(laneX + 12, y, laneX + laneW - 12, y);
+    }
+    lane.fillStyle(0x262c52, 0.55);
+    lane.fillRoundedRect(LANE_X - 72, laneY + 12, 144, laneH - 24, 20);
+    lane.lineStyle(2, 0x3a4170, 1);
+    lane.strokeRoundedRect(laneX, laneY, laneW, laneH, 26);
 
     // Title arch.
     const title = this.add
@@ -378,21 +566,37 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(0.5)
       .setDepth(-750);
     this.tweens.add({ targets: title, scale: 1.03, duration: 1600, yoyo: true, repeat: -1 });
+    // Tap the title to toggle the tuning/stats overlay.
+    title.setInteractive({ useHandCursor: true });
+    title.on("pointerdown", () => this.events.emit("toggle-stats"));
 
-    // Swaying lanterns.
-    for (const lx of [120, 600]) {
-      const lantern = this.add.text(lx, 88, "🏮", { fontSize: "40px" }).setOrigin(0.5).setDepth(-700);
-      this.add
-        .sprite(lx, 92, "glow")
-        .setScale(1)
-        .setTint(0xff5714)
+    // Swaying paper lanterns, each with a flickering halo.
+    for (const [lx, ly] of [[96, 84], [624, 84], [150, 470], [570, 700], [150, 1110], [570, 1340]] as const) {
+      const halo = this.add
+        .sprite(lx, ly + 12, "glow")
+        .setScale(1.1)
+        .setTint(0xff6b2b)
         .setBlendMode(Phaser.BlendModes.ADD)
-        .setAlpha(0.55)
+        .setAlpha(0.5)
         .setDepth(-750);
+      const lantern = this.add
+        .sprite(lx, ly, "lantern")
+        .setOrigin(0.5, 0.08)
+        .setScale(0.9)
+        .setDepth(-700);
       this.tweens.add({
         targets: lantern,
-        angle: { from: -7, to: 7 },
-        duration: 1400,
+        angle: { from: -6, to: 6 },
+        duration: Phaser.Math.Between(1300, 1700),
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.InOut",
+      });
+      this.tweens.add({
+        targets: halo,
+        alpha: { from: 0.32, to: 0.62 },
+        scale: { from: 1.0, to: 1.25 },
+        duration: Phaser.Math.Between(700, 1100),
         yoyo: true,
         repeat: -1,
         ease: "Sine.InOut",

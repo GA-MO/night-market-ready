@@ -89,24 +89,24 @@ export class Stall {
     const awningBase = this.scene.add.sprite(cx, awningY, "awning_base").setTint(0xf4f1ea);
     const awningStripes = this.scene.add.sprite(cx, awningY, "awning_stripes").setTint(def.color);
 
-    // Hanging sign board: dark plaque + colour-coded border keeps the name crisp
-    // under bloom and gives each stall a clear identity (vs. samey striped awnings).
-    const signY = def.y - 50;
+    // Hanging sign board tucked just under the awning — kept high so the taller
+    // cooking stations (wok / mortar pestle / hotpot dome) and food never cover it.
+    const signY = def.y - 72;
     const signW = 200;
-    const signH = 44;
+    const signH = 38;
     const sign = this.scene.add.graphics();
-    sign.fillStyle(0x0e1126, 0.95);
-    sign.fillRoundedRect(cx - signW / 2, signY - signH / 2, signW, signH, 12);
+    sign.fillStyle(0x0e1126, 0.96);
+    sign.fillRoundedRect(cx - signW / 2, signY - signH / 2, signW, signH, 11);
     sign.lineStyle(3, def.color, 1);
-    sign.strokeRoundedRect(cx - signW / 2, signY - signH / 2, signW, signH, 12);
+    sign.strokeRoundedRect(cx - signW / 2, signY - signH / 2, signW, signH, 11);
     // colour accent strip down the left of the sign
     sign.fillStyle(def.color, 1);
-    sign.fillRoundedRect(cx - signW / 2 + 6, signY - signH / 2 + 8, 8, signH - 16, 4);
-    const emoji = this.scene.add.text(cx - signW / 2 + 30, signY, def.emoji, { fontSize: "26px" }).setOrigin(0, 0.5);
+    sign.fillRoundedRect(cx - signW / 2 + 6, signY - signH / 2 + 7, 7, signH - 14, 4);
+    const emoji = this.scene.add.text(cx - signW / 2 + 28, signY, def.emoji, { fontSize: "23px" }).setOrigin(0, 0.5);
     const name = this.scene.add
       .text(cx + 12, signY, def.name, {
         fontFamily: "Arial, sans-serif",
-        fontSize: "23px",
+        fontSize: "21px",
         fontStyle: "bold",
         color: "#ffffff",
       })

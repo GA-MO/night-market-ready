@@ -40,6 +40,8 @@ const NPC_TINTS = [
 ];
 
 const JOY_RADIUS = 64;
+/** Drag distance (px) past which a press is treated as movement, not a tap. */
+const DRAG_TAP = 12;
 
 export class GameScene extends Phaser.Scene {
   state!: SaveState;
@@ -62,6 +64,8 @@ export class GameScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
   private joyActive = false;
+  /** True once the current press has dragged far enough to count as movement (vs a tap). */
+  private pointerDragged = false;
   private joyBase = new Phaser.Math.Vector2();
   private joyVec = new Phaser.Math.Vector2();
   private joyBaseSpr!: Phaser.GameObjects.Sprite;
@@ -84,7 +88,10 @@ export class GameScene extends Phaser.Scene {
     for (const def of STALLS) {
       const stall = new Stall(this, def, this.state.stalls[def.id]);
       stall.setPrice(this.state.prestige);
-      stall.onTapped = () => this.stallTapped(stall);
+      // Fires on release; ignore it if the press was a drag (the player was moving).
+      stall.onTapped = () => {
+        if (!this.pointerDragged) this.stallTapped(stall);
+      };
       stall.onServe = () => {
         this.state.totalServed++;
       };
@@ -521,32 +528,36 @@ export class GameScene extends Phaser.Scene {
     // scrollFactor 0 keeps the joystick pinned to the screen as the camera follows.
     this.joyBaseSpr = this.add
       .sprite(0, 0, "dot")
-      .setScale(5.5)
-      .setAlpha(0.12)
+      .setScale(5.8)
+      .setAlpha(0.18)
+      .setTint(0xcfd6ff)
       .setScrollFactor(0)
       .setDepth(6000)
       .setVisible(false);
     this.joyThumbSpr = this.add
       .sprite(0, 0, "dot")
-      .setScale(2.4)
-      .setAlpha(0.3)
+      .setScale(2.6)
+      .setAlpha(0.5)
+      .setTint(0xffd23f)
       .setScrollFactor(0)
       .setDepth(6001)
       .setVisible(false);
 
     this.input.once("pointerdown", () => sfx.unlockAudio());
 
+    // Drag anywhere to move — even over a stall. A press only becomes a joystick
+    // once it actually drags (>DRAG_TAP px); a press that doesn't drag stays a tap,
+    // so stalls/UI still open on release. This frees the whole play area for movement.
     this.input.on(
       "pointerdown",
-      (p: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]) => {
-        if (over.length > 0) return;
+      (p: Phaser.Input.Pointer) => {
         const ui = this.scene.get("ui");
-        if (ui && ui.input.hitTestPointer(p).length > 0) return;
+        if (ui && ui.input.hitTestPointer(p).length > 0) return; // never start under the HUD
         this.joyActive = true;
+        this.pointerDragged = false;
         this.joyBase.set(p.x, p.y);
         this.joyVec.set(0, 0);
-        this.joyBaseSpr.setPosition(p.x, p.y).setVisible(true);
-        this.joyThumbSpr.setPosition(p.x, p.y).setVisible(true);
+        // sprites stay hidden until the press becomes a drag (no flash on taps)
       },
     );
     this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
@@ -555,6 +566,11 @@ export class GameScene extends Phaser.Scene {
       const dy = p.y - this.joyBase.y;
       const d = Math.hypot(dx, dy);
       if (d > 2) {
+        if (!this.joyBaseSpr.visible) {
+          this.joyBaseSpr.setPosition(this.joyBase.x, this.joyBase.y).setVisible(true);
+          this.joyThumbSpr.setVisible(true);
+        }
+        if (d > DRAG_TAP) this.pointerDragged = true;
         const m = Math.min(d, JOY_RADIUS);
         this.joyVec.set((dx / d) * (m / JOY_RADIUS), (dy / d) * (m / JOY_RADIUS));
         this.joyThumbSpr.setPosition(this.joyBase.x + (dx / d) * m, this.joyBase.y + (dy / d) * m);
@@ -639,9 +655,11 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(0.5)
       .setDepth(-750);
     this.tweens.add({ targets: title, scale: 1.03, duration: 1600, yoyo: true, repeat: -1 });
-    // Tap the title to toggle the tuning/stats overlay.
+    // Tap (not drag) the title to toggle the tuning/stats overlay.
     title.setInteractive({ useHandCursor: true });
-    title.on("pointerdown", () => this.events.emit("toggle-stats"));
+    title.on("pointerup", () => {
+      if (!this.pointerDragged) this.events.emit("toggle-stats");
+    });
 
     // Swaying paper lanterns, each with a flickering halo.
     for (const [lx, ly] of [[96, 84], [624, 84], [150, 470], [570, 700], [150, 1110], [570, 1340]] as const) {

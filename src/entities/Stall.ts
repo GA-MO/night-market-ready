@@ -160,8 +160,11 @@ export class Stall {
     this.liveGroup.setDepth(def.y - 200);
     this.liveGroup.setAlpha(LOCKED_ALPHA);
 
+    // Fire on release so a drag that *starts* over the stall moves the player
+    // (GameScene ignores onTapped when the press turned into a drag) instead of
+    // immediately opening the panel.
     const zone = this.scene.add.zone(cx, def.y, BASE_W + 20, BASE_H + 50).setInteractive();
-    zone.on("pointerdown", () => this.onTapped());
+    zone.on("pointerup", () => this.onTapped());
   }
 
   private buildLockOverlay(): void {

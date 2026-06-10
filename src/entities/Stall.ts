@@ -1,5 +1,17 @@
 import Phaser from "phaser";
-import { COUNTER_MAX, GAME_W, GRILL_MAX, QUEUE_MAX, StallDef, WORLD_H } from "../config";
+import {
+  BASE_AUTOPLATE_MS,
+  COUNTER_MAX,
+  GAME_W,
+  GRILL_MAX,
+  QUEUE_MAX,
+  REVIEW_MS,
+  REVIEW_MULT,
+  RUSH_MULT,
+  StallDef,
+  VIP_MULT,
+  WORLD_H,
+} from "../config";
 import { cookMs, effectivePrice, starsFromSales } from "../economy";
 import type { StallState } from "../save";
 import { sfx } from "../audio";
@@ -27,25 +39,56 @@ export class Stall {
   queue: Customer[] = [];
   /** Per-sale payout after stars + prestige; refreshed via {@link setPrice}. */
   unitPrice: number;
+  /** Global "service" upgrade level (formerly move-speed) — shortens the serve cooldown. */
+  serviceLvl = 0;
   onTapped: () => void = () => {};
   onServe: () => void = () => {};
   onStar: (stall: Stall, stars: number) => void = () => {};
+  /** Focus-mode diegetic taps: on the grill (cook), counter (serve), cash pile (collect). */
+  onGrillTap: () => void = () => {};
+  onCounterTap: () => void = () => {};
+  onPileTap: () => void = () => {};
+  /** Fired when a food critic is served in time (rave review earned). */
+  onReview: (stall: Stall) => void = () => {};
+
+  /** Wall-clock timestamps while a payout buff is live (rave review / tour-bus rush). */
+  reviewUntil = 0;
+  rushUntil = 0;
 
   private worker: Worker | null = null;
   private cookProgress = 0;
   private serveCooldown = 0;
+  private autoPlateAcc = 0;
   private grillItems: Phaser.GameObjects.Sprite[] = [];
   private counterItems: Phaser.GameObjects.Sprite[] = [];
   private pileCoins: Phaser.GameObjects.Sprite[] = [];
   private liveGroup!: Phaser.GameObjects.Container;
   private lockGroup: Phaser.GameObjects.Container | null = null;
   private progressBar!: Phaser.GameObjects.Graphics;
+  /** Last drawn cook-progress fraction; skips the per-frame graphics redraw when unchanged. */
+  private lastProgress = -1;
   private pileMarker!: Phaser.GameObjects.Sprite;
   private lights: Phaser.GameObjects.Sprite[] = [];
   private glow!: Phaser.GameObjects.Sprite;
   private lightsAnimated = false;
   private fire: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
   private sparkles: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
+  /** Floating "cash ready" badge shown on the map overview (hidden while focused). */
+  private mapBadge!: Phaser.GameObjects.Text;
+  private mapMode = true;
+  private focused = false;
+  private lastBadgePile = -1;
+  /** Whole-stall tap zone (enters focus on the map) + diegetic action zones (in focus). */
+  private tapZone!: Phaser.GameObjects.Zone;
+  private grillZone!: Phaser.GameObjects.Zone;
+  private counterZone!: Phaser.GameObjects.Zone;
+  private pileZone!: Phaser.GameObjects.Zone;
+  private grillSprite!: Phaser.GameObjects.Sprite;
+  private counterSprite!: Phaser.GameObjects.Sprite;
+  private hintCollect!: Phaser.GameObjects.Text;
+  /** Pulsing "×N boost" badge shown while a review/rush buff is live. */
+  private buffBadge!: Phaser.GameObjects.Text;
+  private lastBuffText = "";
 
   /** Lost-sale signal for GameScene to play feedback (read + cleared each frame). */
   lostSales = 0;
@@ -112,8 +155,8 @@ export class Stall {
       })
       .setOrigin(0.5);
 
-    const grill = this.scene.add.sprite(this.grillPos.x, this.grillPos.y, def.stationTex);
-    const counter = this.scene.add.sprite(this.counterPos.x, this.counterPos.y, "counter");
+    this.grillSprite = this.scene.add.sprite(this.grillPos.x, this.grillPos.y, def.stationTex);
+    this.counterSprite = this.scene.add.sprite(this.counterPos.x, this.counterPos.y, "counter");
     this.progressBar = this.scene.add.graphics();
 
     this.pileMarker = this.scene.add
@@ -124,6 +167,36 @@ export class Stall {
     const pileMarker = this.pileMarker;
 
     this.sparkles = makeSparkles(this.scene, this.pilePos.x, this.pilePos.y, def.y + 90);
+
+    // "Cash ready" badge floating above the awning — at-a-glance "tend this stall" cue
+    // while browsing the map. Hidden once you zoom into the stall.
+    this.mapBadge = this.scene.add
+      .text(cx, def.y - BASE_H / 2 - 30, "", {
+        fontFamily: "Arial, sans-serif",
+        fontSize: "22px",
+        fontStyle: "bold",
+        color: "#1a1a2e",
+        backgroundColor: "#ffd23f",
+        padding: { x: 12, y: 6 },
+      })
+      .setOrigin(0.5)
+      .setDepth(def.y + 800)
+      .setVisible(false);
+
+    // Buff badge above the cash badge — visible on the map AND in focus, so a rush or
+    // rave review reads at a glance wherever you are.
+    this.buffBadge = this.scene.add
+      .text(cx, def.y - BASE_H / 2 - 64, "", {
+        fontFamily: "Arial, sans-serif",
+        fontSize: "21px",
+        fontStyle: "bold",
+        color: "#1a1a2e",
+        backgroundColor: "#ff9a3c",
+        padding: { x: 10, y: 5 },
+      })
+      .setOrigin(0.5)
+      .setDepth(def.y + 820)
+      .setVisible(false);
 
     this.glow = this.scene.add
       .sprite(cx, def.y, "glow")
@@ -151,8 +224,8 @@ export class Stall {
       sign,
       emoji,
       name,
-      grill,
-      counter,
+      this.grillSprite,
+      this.counterSprite,
       this.progressBar,
       pileMarker,
       ...this.lights,
@@ -160,11 +233,27 @@ export class Stall {
     this.liveGroup.setDepth(def.y - 200);
     this.liveGroup.setAlpha(LOCKED_ALPHA);
 
-    // Fire on release so a drag that *starts* over the stall moves the player
-    // (GameScene ignores onTapped when the press turned into a drag) instead of
-    // immediately opening the panel.
-    const zone = this.scene.add.zone(cx, def.y, BASE_W + 20, BASE_H + 50).setInteractive();
-    zone.on("pointerup", () => this.onTapped());
+    // Map mode: a whole-stall tap zone enters focus (release-fired so a flick to scroll
+    // doesn't open it — GameScene ignores onTapped when the press became a drag).
+    this.tapZone = this.scene.add.zone(cx, def.y, BASE_W + 20, BASE_H + 50).setInteractive();
+    this.tapZone.on("pointerup", () => this.onTapped());
+
+    // Focus mode: diegetic action zones over the station, counter and cash pile. Disabled
+    // until this stall is focused (see setFocused).
+    this.grillZone = this.scene.add.zone(this.grillPos.x, this.grillPos.y, 132, 150);
+    this.grillZone.on("pointerup", () => this.onGrillTap());
+    this.counterZone = this.scene.add.zone(this.counterPos.x, this.counterPos.y, 150, 150);
+    this.counterZone.on("pointerup", () => this.onCounterTap());
+    this.pileZone = this.scene.add.zone(this.pilePos.x, this.pilePos.y, 150, 120);
+    this.pileZone.on("pointerup", () => this.onPileTap());
+
+    // A single "tap the cash" cue floats over the pile when there's money to collect;
+    // the grill & counter invite taps by gently pulsing while focused (see setFocused).
+    this.hintCollect = this.scene.add
+      .text(this.pilePos.x, this.pilePos.y - 42, "👆", { fontSize: "34px" })
+      .setOrigin(0.5)
+      .setDepth(def.y + 760)
+      .setVisible(false);
   }
 
   private buildLockOverlay(): void {
@@ -266,10 +355,67 @@ export class Stall {
     }
 
     this.serveCooldown -= dt;
-    if (this.serveCooldown <= 0) this.tryServe();
+    // While you're focused on this stall YOU serve it by hand (for combo); auto-serve
+    // only runs on stalls you've left, so an active stall builds a queue worth serving.
+    if (!this.focused && this.serveCooldown <= 0) this.tryServe();
 
     this.tickPatience(dt);
     this.worker?.update();
+
+    // No hired helper and not being tended? Slowly self-plate so an un-tended stall still
+    // trickles sales (auto-serve drains the counter) instead of bleeding every customer.
+    if (!this.focused && this.state.workerLvl === 0 && this.grillStock > 0 && this.counterStock < COUNTER_MAX) {
+      this.autoPlateAcc += dt;
+      if (this.autoPlateAcc >= BASE_AUTOPLATE_MS) {
+        this.autoPlateAcc = 0;
+        this.plateUp(1);
+      }
+    }
+
+    if (this.mapMode) this.refreshMapBadge();
+    this.refreshBuffBadge();
+    // The "collect" hint only makes sense when there's cash sitting in the pile.
+    if (this.focused) this.hintCollect.setVisible(this.pileValue > 0);
+  }
+
+  /** Show/hide the boost badge; only touches the Text (and its tween) when state changes. */
+  private refreshBuffBadge(): void {
+    const now = Date.now();
+    const rush = now < this.rushUntil;
+    const rave = now < this.reviewUntil;
+    const txt =
+      rush && rave
+        ? `🚌📰 ×${RUSH_MULT * REVIEW_MULT}`
+        : rush
+          ? `🚌 RUSH ×${RUSH_MULT}`
+          : rave
+            ? `📰 RAVE ×${REVIEW_MULT}`
+            : "";
+    if (txt === this.lastBuffText) return;
+    this.lastBuffText = txt;
+    this.scene.tweens.killTweensOf(this.buffBadge);
+    this.buffBadge.setScale(1);
+    if (!txt) {
+      this.buffBadge.setVisible(false);
+      return;
+    }
+    this.buffBadge.setText(txt).setVisible(true);
+    this.scene.tweens.add({
+      targets: this.buffBadge,
+      scale: 1.08,
+      duration: 420,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.InOut",
+    });
+  }
+
+  private refreshMapBadge(): void {
+    const pile = Math.round(this.pileValue);
+    if (pile === this.lastBadgePile) return;
+    this.lastBadgePile = pile;
+    if (pile > 0) this.mapBadge.setText(`💰 ฿${pile.toLocaleString()}`).setVisible(true);
+    else this.mapBadge.setVisible(false);
   }
 
   /** Drain queued customers' patience; the impatient storm off (prevents deadlock). */
@@ -291,23 +437,67 @@ export class Stall {
     }
   }
 
-  /** Re-index the queue and walk everyone to their (new) slot. */
+  /** Re-index the queue and slide everyone forward. Already-arrived customers KEEP their
+   *  `atSlot` (stay servable) so you can chain serve-combos instead of waiting for the
+   *  whole line to re-walk after every sale. */
   private reflowQueue(): void {
     this.queue.forEach((c, i) => {
       c.queueIndex = i;
-      c.atSlot = false;
       const slot = this.queueSlot(i);
-      c.walkTo(slot.x, slot.y, 150, () => c.arriveAtSlot());
+      if (c.atSlot) c.walkTo(slot.x, slot.y, 220);
+      else c.walkTo(slot.x, slot.y, 220, () => c.arriveAtSlot());
     });
   }
 
+  /** Auto-serve (idle / helper): drains the counter at base price, no combo. */
   private tryServe(): void {
     const front = this.queue[0];
     if (!front || !front.atSlot || this.counterStock <= 0) return;
     this.counterStock--;
     this.refreshCounter();
-    this.addToPile(this.unitPrice);
-    this.serveCooldown = 350;
+    // "Service" upgrade speeds the throughput; floor keeps it from getting silly.
+    this.serveCooldown = Math.max(120, 350 - this.serviceLvl * 25);
+    this.recordSale(front, 1, false);
+  }
+
+  /**
+   * Manual serve (focus, diegetic counter tap): instantly serve up to `n` waiting
+   * customers, drawing food from the counter then the grill, paying `mult`× (combo).
+   * Returns how many customers were served this tap (0 if nobody could be).
+   */
+  serveManual(n: number, mult: number): number {
+    let served = 0;
+    for (let i = 0; i < n; i++) {
+      const front = this.queue[0];
+      if (!front || !front.atSlot) break;
+      if (this.counterStock > 0) {
+        this.counterStock--;
+        this.refreshCounter();
+      } else if (this.grillStock > 0) {
+        this.grillStock--;
+        this.refreshGrill();
+      } else {
+        break; // nothing cooked to hand over
+      }
+      this.recordSale(front, mult, true);
+      served++;
+    }
+    return served;
+  }
+
+  /** Bank a single sale to the cash pile (VIP + combo + rush/review buffs) and advance the queue. */
+  private recordSale(front: Customer, mult: number, manual: boolean): void {
+    const now = Date.now();
+    let boost = 1;
+    if (now < this.reviewUntil) boost *= REVIEW_MULT;
+    if (now < this.rushUntil) boost *= RUSH_MULT;
+    this.addToPile(this.unitPrice * mult * boost * (front.vip ? VIP_MULT : 1));
+    // Only serving the critic YOURSELF earns the rave — helpers don't impress critics,
+    // so idle income never silently inherits the ×2 buff.
+    if (front.critic && manual) {
+      this.reviewUntil = now + REVIEW_MS;
+      this.onReview(this);
+    }
     sfx.serve();
     front.served(360, WORLD_H + 60);
     this.queue.shift();
@@ -337,6 +527,91 @@ export class Stall {
   fillGrill(): void {
     this.grillStock = GRILL_MAX;
     this.refreshGrill();
+  }
+
+  /**
+   * Manual "cook" action (focus mode): fry one more item straight onto the grill, on
+   * top of the idle cook timer. Returns false if the grill is already full.
+   */
+  cookTap(): boolean {
+    if (this.grillStock >= GRILL_MAX) return false;
+    this.cookProgress = 0;
+    this.grillStock++;
+    this.refreshGrill();
+    return true;
+  }
+
+  /** Map mode: whole-stall tap zone (enter focus) + cash badge. */
+  setMapMode(on: boolean): void {
+    this.mapMode = on;
+    if (on) {
+      this.tapZone.setInteractive();
+    } else {
+      this.tapZone.disableInteractive();
+      this.mapBadge.setVisible(false);
+      this.lastBadgePile = -1;
+    }
+  }
+
+  /** Focus mode: enable diegetic action zones + gently pulse the tappable parts. */
+  setFocused(on: boolean): void {
+    this.focused = on && this.state.unlocked;
+    const live = this.focused;
+    for (const z of [this.grillZone, this.counterZone, this.pileZone]) {
+      if (live) z.setInteractive();
+      else z.disableInteractive();
+    }
+    this.scene.tweens.killTweensOf([this.grillSprite, this.counterSprite, this.hintCollect]);
+    this.grillSprite.setScale(1);
+    this.counterSprite.setScale(1);
+    this.hintCollect.setScale(1).setVisible(false);
+    if (!live) return;
+    this.hintCollect.setVisible(this.pileValue > 0);
+    // Pulse the grill & counter so it's obvious they're tappable.
+    this.scene.tweens.add({
+      targets: [this.grillSprite, this.counterSprite],
+      scale: 1.07,
+      duration: 640,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.InOut",
+    });
+    this.scene.tweens.add({
+      targets: this.hintCollect,
+      scale: 1.25,
+      duration: 520,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.InOut",
+    });
+  }
+
+  /**
+   * Manual "serve" action (focus mode): plate up to `batch` cooked items from the
+   * grill onto the counter. Auto-serve (tryServe) then drains the counter to the
+   * queue. Returns how many were plated (0 if nothing to do).
+   */
+  plateUp(batch: number): number {
+    const moved = this.depositToCounter(this.takeFromGrill(Math.max(1, batch)));
+    return moved;
+  }
+
+  /** How many cooked items are ready to plate right now (for button state). */
+  get readyToPlate(): number {
+    return Math.min(this.grillStock, COUNTER_MAX - this.counterStock);
+  }
+
+  /** Dim everything but the focused stall so the active stall reads clearly. */
+  setFocusDim(dim: boolean): void {
+    // Locked stalls keep their faded look; unlocked ones return to full when undimmed.
+    const a = dim ? 0.12 : this.state.unlocked ? 1 : LOCKED_ALPHA;
+    this.liveGroup.setAlpha(a);
+    this.buffBadge.setAlpha(dim ? 0.25 : 1);
+    for (const s of this.grillItems) s.setAlpha(a);
+    for (const s of this.counterItems) s.setAlpha(a);
+    for (const s of this.pileCoins) s.setAlpha(a);
+    this.fire?.setAlpha(a);
+    this.sparkles?.setAlpha(a);
   }
 
   takeFromGrill(n: number): number {
@@ -442,6 +717,10 @@ export class Stall {
   }
 
   private drawProgress(p: number): void {
+    // Redrawing a Graphics object every frame for 5 stalls is wasted GPU; the bar only
+    // moves ~60px, so skip frames where the change is sub-pixel.
+    if (Math.abs(p - this.lastProgress) < 1 / 60) return;
+    this.lastProgress = p;
     const x = this.grillPos.x - 30;
     const y = this.def.y + 30;
     this.progressBar.clear();

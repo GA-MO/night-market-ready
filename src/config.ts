@@ -17,10 +17,57 @@ export const DAILY_CAP_DAY = 7;
 export const GRILL_MAX = 4;
 export const COUNTER_MAX = 8;
 export const QUEUE_MAX = 4;
-export const MAX_CUSTOMERS = 14;
+export const MAX_CUSTOMERS = 18;
 
 /** How long a queued customer waits before storming off (ms). */
 export const PATIENCE_MS = 25_000;
+
+// ---------- active-play feel (combo / VIP / passive trickle) ----------
+
+/** Time window to keep a serve combo alive between manual serves (ms). */
+export const COMBO_WINDOW_MS = 3000;
+/** Bonus payout per combo step and the cap, e.g. step 0.1 × cap 10 = up to +100% (2×). */
+export const COMBO_STEP = 0.1;
+export const COMBO_MAX = 10;
+/** Chance a spawned customer is a paying VIP, and the payout multiplier they give. */
+export const VIP_CHANCE = 0.12;
+export const VIP_MULT = 4;
+/** Without a hired helper a stall still plates one item this often (keeps it from bleeding). */
+export const BASE_AUTOPLATE_MS = 2600;
+
+// ---------- fun events (rush hour / frenzy / critic / lucky cat / goals) ----------
+
+/** Random gap between tour-bus rush hours (ms), how long one lasts, and its payout boost. */
+export const RUSH_GAP_MIN_MS = 60_000;
+export const RUSH_GAP_MAX_MS = 110_000;
+export const RUSH_DURATION_MS = 25_000;
+/** Customer spawn interval while a rush is on (floods the rushed stall). */
+export const RUSH_SPAWN_MS = 480;
+export const RUSH_MULT = 1.5;
+
+/** Combo length that ignites Frenzy, how long it burns, and its flat payout multiplier. */
+export const FRENZY_COMBO = 12;
+export const FRENZY_MS = 8_000;
+export const FRENZY_MULT = 3;
+/** Re-ignition lockout after a Frenzy ends — keeps it a climax, not a perpetual engine
+ *  (bot playtest: without this, frenzy cycled every ~25s of sustained serving). */
+export const FRENZY_COOLDOWN_MS = 60_000;
+
+/** Food critic: spawn chance, short fuse, and the rave-review stall buff for serving in time.
+ *  Tuned down from 0.05/45s — bot playtest showed near-100% rave uptime during active play,
+ *  which turned an "event" into a silent permanent ×2. */
+export const CRITIC_CHANCE = 0.03;
+export const CRITIC_PATIENCE_MS = 12_000;
+export const REVIEW_MULT = 2;
+export const REVIEW_MS = 30_000;
+
+/** Lucky cat: random stroll gap and its reward (seconds of full-throughput income). */
+export const CAT_GAP_MIN_MS = 55_000;
+export const CAT_GAP_MAX_MS = 115_000;
+export const CAT_REWARD_SEC = 40;
+export const CAT_MIN_REWARD = 25;
+/** Hard ceiling so late-game rates don't turn one cat tap into a jackpot. */
+export const CAT_MAX_REWARD = 750;
 
 export interface StallDef {
   id: string;
@@ -106,7 +153,7 @@ export const STALLS: StallDef[] = [
     hasFire: false,
     price: 24,
     baseCookMs: 3800,
-    unlockCost: 3000,
+    unlockCost: 6000,
     cookCostBase: 200,
     workerCostBase: 720,
     side: "right",
@@ -123,7 +170,7 @@ export const STALLS: StallDef[] = [
     hasFire: true,
     price: 34,
     baseCookMs: 4200,
-    unlockCost: 8000,
+    unlockCost: 20000,
     cookCostBase: 340,
     workerCostBase: 1120,
     side: "left",

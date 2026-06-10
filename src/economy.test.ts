@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { STALLS } from "./config";
+import { COMBO_MAX, COMBO_STEP, FRENZY_COMBO } from "./config";
 import {
   OFFLINE_CAP_MS,
   carryCap,
+  comboMultiplier,
   cookMs,
   dailyReward,
   effectivePrice,
+  frenzyProgress,
+  goalForIndex,
   offlineEarnings,
   priceMultiplier,
   ratePerSecond,
@@ -15,6 +19,68 @@ import {
   upgradeCost,
   workerCap,
 } from "./economy";
+
+describe("comboMultiplier", () => {
+  it("is 1x at the start of a streak", () => {
+    expect(comboMultiplier(0)).toBe(1);
+  });
+
+  it("grows by COMBO_STEP per step", () => {
+    expect(comboMultiplier(3)).toBeCloseTo(1 + 3 * COMBO_STEP);
+  });
+
+  it("caps at COMBO_MAX steps", () => {
+    const max = 1 + COMBO_MAX * COMBO_STEP;
+    expect(comboMultiplier(COMBO_MAX)).toBeCloseTo(max);
+    expect(comboMultiplier(COMBO_MAX + 50)).toBeCloseTo(max);
+  });
+
+  it("never goes below 1x", () => {
+    expect(comboMultiplier(-5)).toBe(1);
+  });
+});
+
+describe("frenzyProgress", () => {
+  it("is 0 with no combo and 1 at the frenzy threshold", () => {
+    expect(frenzyProgress(0)).toBe(0);
+    expect(frenzyProgress(FRENZY_COMBO)).toBe(1);
+  });
+
+  it("clamps to [0, 1]", () => {
+    expect(frenzyProgress(-3)).toBe(0);
+    expect(frenzyProgress(FRENZY_COMBO * 5)).toBe(1);
+  });
+});
+
+describe("goalForIndex", () => {
+  it("cycles serve → earn → combo", () => {
+    expect(goalForIndex(0, 5).kind).toBe("serve");
+    expect(goalForIndex(1, 5).kind).toBe("earn");
+    expect(goalForIndex(2, 5).kind).toBe("combo");
+    expect(goalForIndex(3, 5).kind).toBe("serve");
+  });
+
+  it("targets and rewards grow with completed goals", () => {
+    for (const kind of [0, 1, 2]) {
+      const early = goalForIndex(kind, 5);
+      const later = goalForIndex(kind + 9, 5); // three full cycles later
+      expect(later.target).toBeGreaterThanOrEqual(early.target);
+      expect(later.reward).toBeGreaterThan(early.reward);
+    }
+  });
+
+  it("combo targets never exceed the frenzy threshold", () => {
+    for (let i = 2; i < 60; i += 3) {
+      expect(goalForIndex(i, 50).target).toBeLessThanOrEqual(FRENZY_COMBO);
+    }
+  });
+
+  it("has sane floors even with zero income", () => {
+    const g = goalForIndex(1, 0);
+    expect(g.target).toBeGreaterThan(0);
+    expect(g.reward).toBeGreaterThan(0);
+  });
+});
 
 describe("upgradeCost", () => {
   it("grows with level", () => {

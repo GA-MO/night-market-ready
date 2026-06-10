@@ -1,10 +1,11 @@
 import Phaser from "phaser";
-import { STALLS, STAR_SALES } from "../config";
+import { FRENZY_MS, FRENZY_MULT, RUSH_MULT, STALLS, STAR_SALES } from "../config";
 import {
   CAPS,
   CARRY_COST_BASE,
   SPEED_COST_BASE,
   carryCap,
+  frenzyProgress,
   upgradeCost,
   workerCap,
 } from "../economy";
@@ -101,13 +102,30 @@ export class UIScene extends Phaser.Scene {
   private carryBtn!: UIButton;
   private speedBtn!: UIButton;
   private boostBtn!: IconButton;
+  /** Bottom bar of global upgrades (Tray/Service) — shown on the map, hidden in focus. */
+  private mapBar!: Phaser.GameObjects.Container;
   private panel!: Phaser.GameObjects.Container;
   private panelTitle!: Phaser.GameObjects.Text;
   private cookBtn!: UIButton;
   private workerBtn!: UIButton;
   private adFillBtn!: UIButton;
+  private exitBtn!: UIButton;
   private panelStall: Stall | null = null;
   private lastMoney = 0;
+  private uiAcc = 0;
+  private comboText!: Phaser.GameObjects.Text;
+
+  // Fun-event HUD: rotating goal card, tour-bus rush banner, frenzy meter.
+  private goalText!: Phaser.GameObjects.Text;
+  private lastGoalStr = "";
+  private rushText!: Phaser.GameObjects.Text;
+  private rushEndAt = 0;
+  private rushLabel = "";
+  private frenzyBar!: Phaser.GameObjects.Graphics;
+  private frenzyActive = false;
+  private frenzyEndAt = 0;
+  private lastStreak = 0;
+  private lastBarFrac = -1;
 
   private statsPanel!: Phaser.GameObjects.Container;
   private statsText!: Phaser.GameObjects.Text;
@@ -144,21 +162,70 @@ export class UIScene extends Phaser.Scene {
       this.runAd("double_earnings", "2× earnings · 4h", () => this.gs.rewardEarnBoost()),
     );
 
-    // Bottom upgrade bar.
+    // Bottom bar of global upgrades — only relevant while browsing the map.
     const bar = this.add.graphics();
     bar.fillStyle(0x10142c, 0.94);
     bar.fillRoundedRect(16, 1146, 688, 122, 24);
     bar.lineStyle(2, 0x3a4170, 1);
     bar.strokeRoundedRect(16, 1146, 688, 122, 24);
-    this.add.zone(360, 1207, 688, 122).setInteractive(); // absorb taps so the joystick ignores the bar
+    const barZone = this.add.zone(360, 1207, 688, 122).setInteractive(); // absorb taps
     this.carryBtn = new UIButton(this, 190, 1207, 320, 94, 0x2a9d8f, () => this.gs.buyCarry());
     this.speedBtn = new UIButton(this, 530, 1207, 320, 94, 0x457b9d, () => this.gs.buySpeed());
+    this.mapBar = this.add.container(0, 0, [bar, barZone, this.carryBtn.container, this.speedBtn.container]);
 
     this.buildPanel();
     this.buildStatsPanel();
 
+    // Serve-combo banner (driven by GameScene "combo" events).
+    this.comboText = this.add
+      .text(360, 235, "", {
+        fontFamily: "Arial, sans-serif",
+        fontSize: "44px",
+        fontStyle: "bold",
+        color: "#ffd23f",
+        stroke: "#5a2b00",
+        strokeThickness: 8,
+        align: "center",
+      })
+      .setOrigin(0.5)
+      .setDepth(70)
+      .setAlpha(0);
+
+    // Frenzy meter — fills as the combo climbs, drains while Frenzy burns.
+    this.frenzyBar = this.add.graphics().setDepth(70);
+
+    // Rotating session goal card under the money pill.
+    this.goalText = this.add
+      .text(360, 112, "", {
+        fontFamily: "Arial, sans-serif",
+        fontSize: "20px",
+        fontStyle: "bold",
+        color: "#cfe7ff",
+        backgroundColor: "#141830ee",
+        padding: { x: 14, y: 7 },
+      })
+      .setOrigin(0.5)
+      .setDepth(60)
+      .setVisible(false);
+
+    // Tour-bus rush banner with a live countdown.
+    this.rushText = this.add
+      .text(360, 166, "", {
+        fontFamily: "Arial, sans-serif",
+        fontSize: "26px",
+        fontStyle: "bold",
+        color: "#ffd23f",
+        stroke: "#5a2b00",
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5)
+      .setDepth(70)
+      .setVisible(false);
+
     const refresh = () => this.refresh();
-    const onTap = (stall: Stall) => this.openPanel(stall);
+    const onFocus = (stall: Stall) => this.openFocus(stall);
+    const onUnfocus = () => this.closeFocus();
+    const onCombo = (streak: number, mult: number) => this.showCombo(streak, mult);
     const onToast = (msg: string) => this.toast(msg);
     const onParty = () => this.celebrate();
     const onStats = () => this.toggleStats();
@@ -166,9 +233,47 @@ export class UIScene extends Phaser.Scene {
     const onDaily = (d: { day: number; reward: number }) => this.enqueueModal(() => this.showDaily(d));
     const onOffline = (amount: number) => this.enqueueModal(() => this.showOffline(amount));
     const onReset = () => this.onWorldReset();
+    const onRush = (stall: Stall, ms: number) => {
+      this.rushEndAt = Date.now() + ms;
+      this.rushLabel = `🚌 RUSH ${stall.def.emoji} ${stall.def.name} ×${RUSH_MULT}`;
+      this.tweens.killTweensOf(this.rushText);
+      this.rushText.setVisible(true).setAlpha(1).setScale(1.3);
+      this.tweens.add({ targets: this.rushText, scale: 1, duration: 280, ease: "Back.Out" });
+    };
+    const onRushEnd = () => {
+      this.rushEndAt = 0;
+      this.tweens.add({
+        targets: this.rushText,
+        alpha: 0,
+        duration: 400,
+        onComplete: () => this.rushText.setVisible(false),
+      });
+    };
+    const onFrenzy = (on: boolean, ms: number) => {
+      this.frenzyActive = on;
+      this.frenzyEndAt = on ? Date.now() + ms : 0;
+      this.tweens.killTweensOf(this.comboText);
+      if (on) {
+        this.comboText.setText(`🔥 FRENZY ×${FRENZY_MULT} 🔥`).setAlpha(1).setScale(1.5);
+        this.tweens.add({ targets: this.comboText, scale: 1.05, duration: 260, ease: "Back.Out" });
+      } else {
+        this.tweens.add({ targets: this.comboText, alpha: 0, duration: 350 });
+      }
+    };
+    const onGoalDone = () => {
+      this.tweens.killTweensOf(this.goalText);
+      this.goalText.setScale(1.25);
+      this.tweens.add({ targets: this.goalText, scale: 1, duration: 320, ease: "Back.Out" });
+    };
+    this.gs.events.on("rush", onRush);
+    this.gs.events.on("rush-end", onRushEnd);
+    this.gs.events.on("frenzy", onFrenzy);
+    this.gs.events.on("goal-done", onGoalDone);
     this.gs.events.on("money", refresh);
     this.gs.events.on("state-changed", refresh);
-    this.gs.events.on("stall-tapped", onTap);
+    this.gs.events.on("focus-enter", onFocus);
+    this.gs.events.on("focus-exit", onUnfocus);
+    this.gs.events.on("combo", onCombo);
     this.gs.events.on("toast", onToast);
     this.gs.events.on("celebrate", onParty);
     this.gs.events.on("toggle-stats", onStats);
@@ -176,9 +281,15 @@ export class UIScene extends Phaser.Scene {
     this.gs.events.on("offline-earned", onOffline);
     this.gs.events.on("world-reset", onReset);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.gs.events.off("rush", onRush);
+      this.gs.events.off("rush-end", onRushEnd);
+      this.gs.events.off("frenzy", onFrenzy);
+      this.gs.events.off("goal-done", onGoalDone);
       this.gs.events.off("money", refresh);
       this.gs.events.off("state-changed", refresh);
-      this.gs.events.off("stall-tapped", onTap);
+      this.gs.events.off("focus-enter", onFocus);
+      this.gs.events.off("focus-exit", onUnfocus);
+      this.gs.events.off("combo", onCombo);
       this.gs.events.off("toast", onToast);
       this.gs.events.off("celebrate", onParty);
       this.gs.events.off("toggle-stats", onStats);
@@ -189,88 +300,134 @@ export class UIScene extends Phaser.Scene {
 
     this.refresh();
 
-    // "Drag to move" nudge — fades out; the grill→counter→cash walkthrough
-    // (GameScene tutorial arrows) teaches the loop itself for new players.
-    const hint = this.add
-      .text(360, 250, "Drag anywhere to move", {
-        fontFamily: "Arial, sans-serif",
-        fontSize: "22px",
-        color: "#cfd6ff",
-      })
-      .setOrigin(0.5);
-    this.tweens.add({
-      targets: hint,
-      alpha: 0,
-      delay: 6000,
-      duration: 800,
-      onComplete: () => hint.destroy(),
-    });
   }
 
-  // ---------- stall panel ----------
+  /** Throttled live HUD: focus panel, goal card, rush countdown and frenzy meter. */
+  update(_t: number, dt: number): void {
+    this.uiAcc += dt;
+    if (this.uiAcc < 150) return;
+    this.uiAcc = 0;
+    if (this.panel.visible) this.refresh();
+    this.refreshGoalCard();
+    this.refreshRushBanner();
+    this.refreshFrenzyBar();
+  }
+
+  private refreshGoalCard(): void {
+    const g = this.gs.goalInfo();
+    if (!g) {
+      if (this.lastGoalStr) {
+        this.lastGoalStr = "";
+        this.goalText.setVisible(false);
+      }
+      return;
+    }
+    const what =
+      g.kind === "serve"
+        ? `Serve ${g.target}`
+        : g.kind === "earn"
+          ? `Earn ฿${g.target.toLocaleString()}`
+          : `Combo ×${g.target}`;
+    const str = `🎯 ${what} · ${g.progress.toLocaleString()}/${g.target.toLocaleString()} · 🎁 ฿${g.reward.toLocaleString()}`;
+    if (str === this.lastGoalStr) return;
+    this.lastGoalStr = str;
+    this.goalText.setText(str).setVisible(true);
+  }
+
+  private refreshRushBanner(): void {
+    if (this.rushEndAt <= 0) return;
+    const sec = Math.max(0, Math.ceil((this.rushEndAt - Date.now()) / 1000));
+    const str = `${this.rushLabel} · ${sec}s`;
+    if (this.rushText.text !== str) this.rushText.setText(str);
+  }
+
+  /** Redraws only when the fraction visibly moved — cheap on the GPU. */
+  private refreshFrenzyBar(): void {
+    const ready = this.gs.frenzyReady();
+    let frac = 0;
+    if (this.frenzyActive) frac = Phaser.Math.Clamp((this.frenzyEndAt - Date.now()) / FRENZY_MS, 0, 1);
+    else if (this.lastStreak >= 2) frac = frenzyProgress(this.lastStreak);
+    // Encode "recharging" in the cached value so the colour flips exactly once.
+    const cacheKey = ready ? frac : -frac - 2;
+    if (Math.abs(cacheKey - this.lastBarFrac) < 0.01) return;
+    this.lastBarFrac = cacheKey;
+    const g = this.frenzyBar;
+    g.clear();
+    if (frac <= 0) return;
+    const w = 240;
+    const x = 360 - w / 2;
+    const y = 268;
+    g.fillStyle(0x05060f, 0.6);
+    g.fillRoundedRect(x - 3, y - 3, w + 6, 14, 7);
+    // Grey while the post-frenzy cooldown runs — the combo still pays, frenzy just can't ignite.
+    g.fillStyle(this.frenzyActive ? 0xff9a3c : ready ? 0xffd23f : 0x5a5f82, 1);
+    g.fillRoundedRect(x, y, Math.max(6, w * frac), 8, 4);
+  }
+
+  // ---------- focus control panel ----------
 
   private buildPanel(): void {
+    // Slim bottom bar: actions are diegetic (tap the grill/counter/cash in the scene),
+    // so this only holds the two per-stall upgrades plus Fill / Back.
     const bg = this.add.graphics();
-    bg.fillStyle(0x141830, 0.97);
-    bg.fillRoundedRect(-330, -150, 660, 300, 22);
-    bg.lineStyle(3, 0x4a5390, 1);
-    bg.strokeRoundedRect(-330, -150, 660, 300, 22);
+    bg.fillStyle(0x10142c, 0.95);
+    bg.fillRoundedRect(-340, -128, 680, 256, 24);
+    bg.lineStyle(2, 0x3a4170, 1);
+    bg.strokeRoundedRect(-340, -128, 680, 256, 24);
 
     this.panelTitle = this.add
-      .text(0, -116, "", {
+      .text(0, -100, "", {
         fontFamily: "Arial, sans-serif",
-        fontSize: "28px",
+        fontSize: "26px",
         fontStyle: "bold",
         color: "#ffffff",
       })
       .setOrigin(0.5);
 
-    const close = this.add
-      .text(296, -116, "✕", {
-        fontFamily: "Arial, sans-serif",
-        fontSize: "30px",
-        fontStyle: "bold",
-        color: "#8f97c4",
-      })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    close.on("pointerdown", () => this.closePanel());
-
-    this.cookBtn = new UIButton(this, -160, -10, 300, 96, 0xe76f51, () => {
+    // Per-stall upgrades.
+    this.cookBtn = new UIButton(this, -168, -28, 324, 76, 0xe76f51, () => {
       if (this.panelStall) this.gs.buyCook(this.panelStall);
     });
-    this.workerBtn = new UIButton(this, 160, -10, 300, 96, 0x7b2cbf, () => {
+    this.workerBtn = new UIButton(this, 168, -28, 324, 76, 0x7b2cbf, () => {
       if (this.panelStall) this.gs.buyWorker(this.panelStall);
     });
-    this.adFillBtn = new UIButton(this, 0, 100, 620, 70, 0x2a9d8f, () =>
+
+    // Footer: rewarded grill-fill + leave focus.
+    this.adFillBtn = new UIButton(this, -168, 62, 324, 60, 0x457b9d, () =>
       this.runAd("instant_grill", "Instant-fill grills", () => this.gs.rewardFillGrills()),
     );
-    this.adFillBtn.setText("📺 Instant-fill grills", "free");
+    this.adFillBtn.setText("📺 Fill grill", "free");
+    this.exitBtn = new UIButton(this, 168, 62, 324, 60, 0x2a9d8f, () => this.gs.exitFocus());
+    this.exitBtn.setText("⬅ Back", "");
 
-    this.panel = this.add.container(360, 900, [
+    this.panel = this.add.container(360, 1140, [
       bg,
       this.panelTitle,
-      close,
       this.cookBtn.container,
       this.workerBtn.container,
       this.adFillBtn.container,
+      this.exitBtn.container,
     ]);
-    this.panel.setSize(660, 300).setInteractive();
+    this.panel.setSize(680, 256).setInteractive();
     this.panel.setVisible(false);
-    this.cookBtn.container.setPosition(-160, -10);
-    this.workerBtn.container.setPosition(160, -10);
-    this.adFillBtn.container.setPosition(0, 100);
+    this.cookBtn.container.setPosition(-168, -28);
+    this.workerBtn.container.setPosition(168, -28);
+    this.adFillBtn.container.setPosition(-168, 62);
+    this.exitBtn.container.setPosition(168, 62);
   }
 
-  private openPanel(stall: Stall): void {
+  private openFocus(stall: Stall): void {
     this.panelStall = stall;
     this.panel.setVisible(true);
+    this.mapBar.setVisible(false);
+    this.uiAcc = 0;
     this.refresh();
   }
 
-  private closePanel(): void {
+  private closeFocus(): void {
     this.panelStall = null;
     this.panel.setVisible(false);
+    this.mapBar.setVisible(true);
   }
 
   // ---------- stats overlay ----------
@@ -323,21 +480,23 @@ export class UIScene extends Phaser.Scene {
 
     this.boostBtn.setIcon(this.gs.earnBoostActive() ? "⚡" : "📺");
 
+    // Global upgrades, repurposed for the focus model: tray size = plates per serve
+    // tap (carryCap), service = faster auto-serve throughput (speed level).
     if (st.carryLvl >= CAPS.carry) {
-      this.carryBtn.setText("👜 Carry MAX", "");
+      this.carryBtn.setText("🍽️ Tray MAX", "");
       this.carryBtn.setEnabled(false);
     } else {
       const cost = upgradeCost(CARRY_COST_BASE, st.carryLvl);
-      this.carryBtn.setText(`👜 Carry ${carryCap(st.carryLvl)} → ${carryCap(st.carryLvl + 1)}`, money(cost));
+      this.carryBtn.setText(`🍽️ Tray ${carryCap(st.carryLvl)} → ${carryCap(st.carryLvl + 1)}`, money(cost));
       this.carryBtn.setEnabled(st.money >= cost);
     }
 
     if (st.speedLvl >= CAPS.speed) {
-      this.speedBtn.setText("👟 Speed MAX", "");
+      this.speedBtn.setText("⚡ Service MAX", "");
       this.speedBtn.setEnabled(false);
     } else {
       const cost = upgradeCost(SPEED_COST_BASE, st.speedLvl);
-      this.speedBtn.setText(`👟 Speed Lv ${st.speedLvl + 1}`, money(cost));
+      this.speedBtn.setText(`⚡ Service Lv ${st.speedLvl + 1}`, money(cost));
       this.speedBtn.setEnabled(st.money >= cost);
     }
 
@@ -599,7 +758,7 @@ export class UIScene extends Phaser.Scene {
 
   private onWorldReset(): void {
     this.closeModal();
-    this.closePanel();
+    this.closeFocus();
     this.refresh();
   }
 
@@ -663,9 +822,22 @@ export class UIScene extends Phaser.Scene {
 
   // ---------- feedback ----------
 
+  private showCombo(streak: number, mult: number): void {
+    this.lastStreak = streak;
+    if (this.frenzyActive) return; // the FRENZY banner owns the text until it ends
+    if (streak < 2) {
+      this.tweens.add({ targets: this.comboText, alpha: 0, duration: 250 });
+      return;
+    }
+    this.comboText.setText(`COMBO x${streak}\n${mult.toFixed(1)}× 🔥`);
+    this.tweens.killTweensOf(this.comboText);
+    this.comboText.setAlpha(1).setScale(1.35);
+    this.tweens.add({ targets: this.comboText, scale: 1, duration: 220, ease: "Back.Out" });
+  }
+
   private toast(msg: string): void {
     const t = this.add
-      .text(360, 300, msg, {
+      .text(360, 348, msg, {
         fontFamily: "Arial, sans-serif",
         fontSize: "24px",
         fontStyle: "bold",
@@ -678,7 +850,7 @@ export class UIScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(80)
       .setAlpha(0);
-    this.tweens.add({ targets: t, alpha: 1, y: 282, duration: 250 });
+    this.tweens.add({ targets: t, alpha: 1, y: 330, duration: 250 });
     this.tweens.add({
       targets: t,
       alpha: 0,

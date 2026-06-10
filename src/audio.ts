@@ -121,6 +121,28 @@ class Sfx {
   deny(): void {
     this.tone(160, 0.12, "sawtooth", 0.04);
   }
+
+  /** Rising blip per combo step — pitch climbs as the streak grows. */
+  comboTick(step: number): void {
+    this.tone(480 + Math.min(step, 16) * 55, 0.05, "triangle", 0.045);
+  }
+
+  /** Frenzy ignition fanfare. */
+  frenzy(): void {
+    [659, 784, 988, 1319, 1568].forEach((f, i) => this.tone(f, 0.11, "square", 0.045, i * 0.05));
+  }
+
+  /** Tour-bus horn: a short two-note sawtooth chord. */
+  rush(): void {
+    this.tone(220, 0.28, "sawtooth", 0.045);
+    this.tone(277, 0.28, "sawtooth", 0.045);
+  }
+
+  /** Lucky-cat chirp: a quick falling meow-ish slide. */
+  meow(): void {
+    this.tone(920, 0.08, "sine", 0.05);
+    this.tone(690, 0.12, "sine", 0.04, 0.07);
+  }
 }
 
 export const sfx = new Sfx();

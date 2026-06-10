@@ -14,6 +14,14 @@ const game = new Phaser.Game({
     width: GAME_W,
     height: GAME_H,
   },
+  // Cap the loop at 60fps. Without this, 120Hz phones render twice the frames —
+  // a major cause of the device heating up. forceSetTimeOut makes the cap actually
+  // bind (RAF alone follows the display refresh rate).
+  fps: { target: 60, forceSetTimeOut: true },
+  // Ask the GPU for its low-power profile. Antialias stays ON — the procedural art has
+  // lots of rounded/rotated edges that look jagged without it, and the big thermal wins
+  // came from killing the bloom shader + capping fps, not from MSAA.
+  render: { powerPreference: "low-power", antialias: true, roundPixels: true },
   scene: [BootScene, GameScene, UIScene],
 });
 

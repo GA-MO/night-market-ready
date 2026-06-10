@@ -8,9 +8,11 @@ type Emitter = Phaser.GameObjects.Particles.ParticleEmitter;
 export function applyCameraFx(scene: Phaser.Scene): void {
   if (scene.game.renderer.type !== Phaser.WEBGL) return;
   const fx = scene.cameras.main.postFX;
+  // Vignette only — it's a single cheap pass. The bloom that used to live here was a
+  // multi-pass full-screen blur run every frame: the biggest single cause of phones
+  // overheating. The ADD-blend glow sprites (lanterns, coins, halos) already give the
+  // warm glow look without a screen-wide shader.
   fx.addVignette(0.5, 0.5, 0.82, 0.4);
-  // Gentler bloom: keeps the lantern/coin glow but stops washing out text & signage.
-  fx.addBloom(0xffffff, 1, 1, 0.9, 0.55, 5);
 }
 
 /** Warm fireflies drifting through the market. */
@@ -57,7 +59,7 @@ export function grillFire(scene: Phaser.Scene, x: number, y: number, depth: numb
       scale: { start: 0.4, end: 0 },
       alpha: { start: 0.95, end: 0 },
       lifespan: { min: 450, max: 950 },
-      frequency: 120,
+      frequency: 220,
       quantity: 1,
       tint: [0xffe39a, 0xff9a3c, 0xff5a1e],
       blendMode: "ADD",
@@ -75,7 +77,7 @@ export function steamPlume(scene: Phaser.Scene, x: number, y: number, depth: num
       scale: { start: 0.22, end: 0.8 },
       alpha: { start: 0.16, end: 0 },
       lifespan: { min: 1200, max: 2200 },
-      frequency: 360,
+      frequency: 600,
       quantity: 1,
       tint: 0xeae6ff,
       blendMode: "SCREEN",

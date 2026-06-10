@@ -1,11 +1,15 @@
 import Phaser from "phaser";
-import { PATIENCE_MS } from "../config";
+import { CRITIC_PATIENCE_MS, PATIENCE_MS } from "../config";
 
 export class Customer {
   readonly obj: Phaser.GameObjects.Container;
   atSlot = false;
   queueIndex = -1;
   dead = false;
+  /** VIP customers pay a multiple of the normal price — a juicy surprise in the queue. */
+  vip = false;
+  /** Food critics have a short fuse; serving them in time earns the stall a rave review. */
+  critic = false;
 
   private tw: Phaser.Tweens.Tween | null = null;
   private patienceMax = PATIENCE_MS;
@@ -38,6 +42,46 @@ export class Customer {
     this.obj = scene.add.container(x, y, parts);
     this.obj.setScale(rnd.realInRange(0.9, 1.12));
     this.obj.setDepth(y);
+  }
+
+  /** Mark this customer as a paying VIP: gold aura + crown. */
+  makeVip(): void {
+    if (this.vip || this.dead) return;
+    this.vip = true;
+    const aura = this.scene.add
+      .sprite(0, 2, "glow")
+      .setTint(0xffd23f)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0.5)
+      .setScale(0.85);
+    this.obj.addAt(aura, 0);
+    const crown = this.scene.add.text(0, -34, "👑", { fontSize: "22px" }).setOrigin(0.5);
+    this.obj.add(crown);
+    this.scene.tweens.add({
+      targets: aura,
+      alpha: 0.2,
+      scale: 1.05,
+      duration: 700,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.InOut",
+    });
+  }
+
+  /** Mark this customer as a food critic: notepad badge, pale aura and a short fuse. */
+  makeCritic(): void {
+    if (this.critic || this.vip || this.dead) return;
+    this.critic = true;
+    this.patienceMax = CRITIC_PATIENCE_MS;
+    const aura = this.scene.add
+      .sprite(0, 2, "glow")
+      .setTint(0xcfe7ff)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0.35)
+      .setScale(0.8);
+    this.obj.addAt(aura, 0);
+    const pad = this.scene.add.text(0, -34, "📰", { fontSize: "22px" }).setOrigin(0.5);
+    this.obj.add(pad);
   }
 
   walkTo(x: number, y: number, speed: number, onArrive?: () => void): void {

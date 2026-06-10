@@ -1,5 +1,13 @@
 // Pure balance math — kept free of Phaser so it is unit-testable.
-import { DAILY_CAP_DAY, PRESTIGE_BONUS, STAR_BONUS, STAR_SALES } from "./config";
+import {
+  COMBO_MAX,
+  COMBO_STEP,
+  DAILY_CAP_DAY,
+  FRENZY_COMBO,
+  PRESTIGE_BONUS,
+  STAR_BONUS,
+  STAR_SALES,
+} from "./config";
 
 export const GROWTH = 1.6;
 export const CARRY_COST_BASE = 50;
@@ -62,6 +70,66 @@ export function ratePerSecond(stalls: OfflineStallInfo[]): number {
     r += s.price / (cookMs(s.baseCookMs, s.cookLvl) / 1000);
   }
   return r;
+}
+
+// ---------- active-play combo ----------
+
+/**
+ * Payout multiplier for serving on a streak. `streak` is the number of consecutive
+ * manual serves already banked (0 = first serve). Caps at COMBO_MAX steps.
+ * Only manual serving builds a streak — idle/helper sales always pay 1×, so being
+ * present and tapping is always worth more than leaving the stall on autopilot.
+ */
+export function comboMultiplier(streak: number): number {
+  return 1 + Math.min(Math.max(streak, 0), COMBO_MAX) * COMBO_STEP;
+}
+
+/** How close the current combo is to igniting Frenzy (0..1). */
+export function frenzyProgress(combo: number, threshold = FRENZY_COMBO): number {
+  if (threshold <= 0) return 1;
+  return Math.min(1, Math.max(0, combo / threshold));
+}
+
+// ---------- rotating session goals ----------
+
+export type GoalKind = "serve" | "earn" | "combo";
+
+export interface Goal {
+  kind: GoalKind;
+  target: number;
+  reward: number;
+}
+
+/**
+ * Deterministic rotating goal: cycles serve → earn → combo, with targets and rewards
+ * that scale with how many goals were already completed and the player's earning rate.
+ * The goal is generated once (when the previous one completes) and stored in the save,
+ * so a rising rate never moves an in-flight target.
+ */
+export function goalForIndex(index: number, ratePerSec: number): Goal {
+  const i = Math.max(0, index);
+  const cycle = i % 3;
+  const rate = Math.max(1, ratePerSec);
+  // Difficulty ramps with EVERY completed goal (not every cycle): bot playtests showed
+  // player income grows much faster than per-cycle targets, rotating a goal every ~15s.
+  // Early goals stay snappy (onboarding); by goal ~8 each one takes minutes. Rewards are
+  // a treat (~20% of the effort), not an income engine.
+  if (cycle === 0) {
+    return {
+      kind: "serve",
+      target: 12 + i * 6,
+      reward: Math.max(25, Math.floor(rate * (10 + i * 5))),
+    };
+  }
+  if (cycle === 1) {
+    const target = Math.max(60, Math.floor(rate * 45 * (1 + i)));
+    return { kind: "earn", target, reward: Math.max(30, Math.floor(target * 0.22)) };
+  }
+  return {
+    kind: "combo",
+    target: Math.min(FRENZY_COMBO, 4 + i),
+    reward: Math.max(40, Math.floor(rate * (12 + i * 6))),
+  };
 }
 
 // ---------- collection book ----------

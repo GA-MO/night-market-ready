@@ -1,21 +1,42 @@
 import Phaser from "phaser";
 import {
-  COUNTER_MAX,
+  CAT_GAP_MAX_MS,
+  CAT_GAP_MIN_MS,
+  CAT_MAX_REWARD,
+  CAT_MIN_REWARD,
+  CAT_REWARD_SEC,
+  COMBO_WINDOW_MS,
+  CRITIC_CHANCE,
   ENTRANCE,
+  FRENZY_COMBO,
+  FRENZY_COOLDOWN_MS,
+  FRENZY_MS,
+  FRENZY_MULT,
   GAME_W,
   LANE_X,
   MAX_CUSTOMERS,
   QUEUE_MAX,
+  REVIEW_MS,
+  REVIEW_MULT,
+  RUSH_DURATION_MS,
+  RUSH_GAP_MAX_MS,
+  RUSH_GAP_MIN_MS,
+  RUSH_MULT,
+  RUSH_SPAWN_MS,
   STALLS,
+  VIP_CHANCE,
   WORLD_H,
 } from "../config";
 import {
   CAPS,
   CARRY_COST_BASE,
+  Goal,
   SPEED_COST_BASE,
+  carryCap,
+  comboMultiplier,
   dailyReward,
   effectivePrice,
-  moveSpeed,
+  goalForIndex,
   offlineEarnings,
   ratePerSecond,
   streakForToday,
@@ -26,7 +47,6 @@ import { sfx } from "../audio";
 import { ambientFireflies, applyCameraFx, collectPunch, floatMoney } from "../fx";
 import { track } from "../analytics";
 import { AdProvider, MockAdProvider } from "../ads";
-import { Player } from "../entities/Player";
 import { Stall } from "../entities/Stall";
 import { Customer } from "../entities/Customer";
 
@@ -39,9 +59,16 @@ const NPC_TINTS = [
   0xf94144, 0xf3722c, 0xf8961e, 0xf9c74f, 0x90be6d, 0x43aa8b, 0x577590, 0xff70a6, 0x70d6ff,
 ];
 
-const JOY_RADIUS = 64;
-/** Drag distance (px) past which a press is treated as movement, not a tap. */
+/** Browsable map zoom (stalls big & readable) vs. a single focused stall filling the screen. */
+const MAP_ZOOM = 1;
+const FOCUS_ZOOM = 1.5;
+const CAM_TWEEN_MS = 360;
+/** A press that moves more than this many screen px counts as a scroll, not a tap. */
 const DRAG_TAP = 12;
+/** Per-frame velocity decay for flick-scrolling the map (1 = no friction). */
+const SCROLL_FRICTION = 0.9;
+/** Downward swipe (screen px) inside a focused stall that pops back to the map. */
+const SWIPE_BACK = 110;
 
 export class GameScene extends Phaser.Scene {
   state!: SaveState;
@@ -49,27 +76,43 @@ export class GameScene extends Phaser.Scene {
   readonly ads: AdProvider = new MockAdProvider();
   /** Offline ฿ granted on this load — used by the "double it" ad reward. */
   lastOfflineEarned = 0;
+  /** The stall the camera is zoomed into, or null in the market overview. */
+  focusStall: Stall | null = null;
 
-  player!: Player;
   private customers: Customer[] = [];
   private sessionStartMs = 0;
   private sessionStartEarned = 0;
   private earnBoostUntil = 0;
-  private tutorialStep = -1;
-  private tutArrow?: Phaser.GameObjects.Text;
-  private tutLabel?: Phaser.GameObjects.Text;
   private spawnAcc = 0;
-  private actionAcc = 0;
   private saveAcc = 0;
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasd!: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
-  private joyActive = false;
-  /** True once the current press has dragged far enough to count as movement (vs a tap). */
+
+  // Serve-combo state (manual serving on a streak pays a rising multiplier).
+  private combo = 0;
+  private lastServeMs = -99999;
+  /** Scene-time when the current Frenzy burns out (0 = not frenzied). */
+  private frenzyUntilMs = 0;
+  /** Scene-time when Frenzy may ignite again (cooldown keeps it a climax). */
+  private frenzyReadyAt = 0;
+
+  // Tour-bus rush hour: a timed crowd surge onto one stall with boosted payouts.
+  private nextRushAt = 0;
+  private rushStall: Stall | null = null;
+  private rushEndMs = 0;
+
+  // Lucky cat stroll + rotating session goal.
+  private nextCatAt = 0;
+  private cat: Phaser.GameObjects.Text | null = null;
+  /** Highest combo reached since the current goal started (for "combo" goals). */
+  private bestComboThisGoal = 0;
+
+  // Map drag-scroll state.
+  private dragging = false;
+  /** True once the current press moved far enough to be a scroll (suppresses the tap). */
   private pointerDragged = false;
-  private joyBase = new Phaser.Math.Vector2();
-  private joyVec = new Phaser.Math.Vector2();
-  private joyBaseSpr!: Phaser.GameObjects.Sprite;
-  private joyThumbSpr!: Phaser.GameObjects.Sprite;
+  private lastDragY = 0;
+  private scrollVel = 0;
+  /** Map scroll position remembered while focused, so Back returns you where you were. */
+  private mapScrollY = 0;
 
   constructor() {
     super("game");
@@ -79,6 +122,15 @@ export class GameScene extends Phaser.Scene {
     this.state = loadState();
     this.stalls = [];
     this.customers = [];
+    this.focusStall = null;
+    // Event state must reset on a prestige scene.restart() — the instance survives.
+    this.combo = 0;
+    this.frenzyUntilMs = 0;
+    this.frenzyReadyAt = 0;
+    this.rushStall = null;
+    this.rushEndMs = 0;
+    this.cat = null;
+    this.bestComboThisGoal = 0;
 
     this.sessionStartMs = this.time.now;
     this.sessionStartEarned = this.state.totalEarned;
@@ -88,28 +140,35 @@ export class GameScene extends Phaser.Scene {
     for (const def of STALLS) {
       const stall = new Stall(this, def, this.state.stalls[def.id]);
       stall.setPrice(this.state.prestige);
-      // Fires on release; ignore it if the press was a drag (the player was moving).
+      stall.serviceLvl = this.state.speedLvl;
+      // Ignore the tap if the press was a scroll/flick (the player was browsing).
       stall.onTapped = () => {
         if (!this.pointerDragged) this.stallTapped(stall);
       };
+      // Diegetic actions inside a focused stall: tap the station / counter / cash directly.
+      stall.onGrillTap = () => this.cookFocus();
+      stall.onCounterTap = () => this.serveFocus();
+      stall.onPileTap = () => this.collectFocus();
       stall.onServe = () => {
         this.state.totalServed++;
       };
       stall.onStar = (s, stars) => this.onStarEarned(s, stars);
+      stall.onReview = (s) => this.onRaveReview(s);
       stall.ensureWorker();
       this.stalls.push(stall);
     }
-    this.player = new Player(this, LANE_X, 480);
 
-    this.setupInput();
-
-    // World is taller than the viewport — follow the player down the market lane.
+    // A browsable map: drag to scroll the lane, tap a stall to zoom in and manage it.
+    // No follow target and no roaming player — you manage one stall at a time.
     this.cameras.main.setBounds(0, 0, GAME_W, WORLD_H);
-    this.cameras.main.startFollow(this.player.obj, true, 0.08, 0.08);
-    this.cameras.main.setDeadzone(GAME_W, 260);
+    this.cameras.main.setZoom(MAP_ZOOM);
+    this.cameras.main.setScroll(0, 0);
+    for (const s of this.stalls) s.setMapMode(true);
 
     applyCameraFx(this);
-    ambientFireflies(this, 20);
+    ambientFireflies(this, 12);
+
+    this.setupInput();
 
     const persist = () => saveState(this.state);
     window.addEventListener("pagehide", persist);
@@ -121,6 +180,9 @@ export class GameScene extends Phaser.Scene {
     this.grantOfflineEarnings();
     this.checkDailyStreak();
     this.startTutorial();
+    this.ensureGoal();
+    this.nextRushAt = this.time.now + Phaser.Math.Between(RUSH_GAP_MIN_MS, RUSH_GAP_MAX_MS);
+    this.nextCatAt = this.time.now + Phaser.Math.Between(CAT_GAP_MIN_MS, CAT_GAP_MAX_MS);
 
     // Sync the HUD (matters after a prestige scene restart — UIScene stays alive).
     this.events.emit("money", this.state.money);
@@ -129,31 +191,44 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
-    const dtSec = delta / 1000;
-
-    let vx = 0;
-    let vy = 0;
-    if (this.cursors.left.isDown || this.wasd.A.isDown) vx -= 1;
-    if (this.cursors.right.isDown || this.wasd.D.isDown) vx += 1;
-    if (this.cursors.up.isDown || this.wasd.W.isDown) vy -= 1;
-    if (this.cursors.down.isDown || this.wasd.S.isDown) vy += 1;
-    if (this.joyActive && (this.joyVec.x !== 0 || this.joyVec.y !== 0)) {
-      vx = this.joyVec.x;
-      vy = this.joyVec.y;
+    // Flick-scroll inertia on the map (skipped while focused or actively dragging).
+    if (!this.focusStall && !this.dragging && Math.abs(this.scrollVel) > 0.2) {
+      this.cameras.main.scrollY += this.scrollVel;
+      this.scrollVel *= SCROLL_FRICTION;
     }
-    this.player.update(dtSec, vx, vy, moveSpeed(this.state.speedLvl));
 
-    this.actionAcc += delta;
-    if (this.actionAcc >= 150) {
-      this.actionAcc = 0;
-      this.zoneActions();
+    // Serve combo decays if you stop serving (paused during Frenzy — it's a celebration).
+    if (this.frenzyUntilMs === 0 && this.combo > 0 && this.time.now - this.lastServeMs >= COMBO_WINDOW_MS) {
+      this.combo = 0;
+      this.events.emit("combo", 0, 1);
     }
+    if (this.frenzyUntilMs > 0 && this.time.now >= this.frenzyUntilMs) this.endFrenzy();
+
+    // Tour-bus rush lifecycle.
+    if (this.rushStall) {
+      if (this.time.now >= this.rushEndMs) this.endRush();
+    } else if (
+      this.state.tutorialDone &&
+      this.time.now >= this.nextRushAt &&
+      this.stalls.some((s) => s.state.unlocked)
+    ) {
+      this.startRush();
+    }
+
+    // A lucky cat occasionally strolls across the screen (map AND focus — playtest
+    // showed engaged players never leave focus, so a map-only cat never appeared).
+    if (!this.cat && this.time.now >= this.nextCatAt) this.spawnCat();
+
+    this.tickGoal();
 
     for (const stall of this.stalls) stall.update(delta);
 
     this.spawnAcc += delta;
     const unlocked = this.stalls.filter((s) => s.state.unlocked).length;
-    const interval = Math.max(1100, 2600 - (unlocked - 1) * 500);
+    let interval = Math.max(1100, 2600 - (unlocked - 1) * 500);
+    // A focused stall draws a steady crowd so you can chain serve-combos.
+    if (this.focusStall) interval = Math.min(interval, 750);
+    if (this.rushStall) interval = Math.min(interval, RUSH_SPAWN_MS);
     if (this.spawnAcc >= interval) {
       this.spawnAcc = 0;
       this.spawnCustomer();
@@ -187,6 +262,7 @@ export class GameScene extends Phaser.Scene {
     if (this.state.speedLvl >= CAPS.speed) return;
     if (!this.spend(upgradeCost(SPEED_COST_BASE, this.state.speedLvl))) return;
     this.state.speedLvl++;
+    for (const s of this.stalls) s.serviceLvl = this.state.speedLvl;
     this.afterPurchase();
   }
 
@@ -228,79 +304,294 @@ export class GameScene extends Phaser.Scene {
     this.events.emit("money", this.state.money);
   }
 
+  // ---------- focus mode ----------
+
   private stallTapped(stall: Stall): void {
     if (!stall.state.unlocked) {
       if (this.spend(stall.def.unlockCost)) {
         stall.setUnlocked(true);
+        stall.serviceLvl = this.state.speedLvl;
         track("unlock", { stall: stall.def.id, cost: stall.def.unlockCost });
         saveState(this.state);
         this.events.emit("state-changed");
         if (this.stalls.every((s) => s.state.unlocked)) {
           this.events.emit("celebrate");
         }
+        this.enterFocus(stall);
       } else {
         this.events.emit("toast", `Need ฿ ${stall.def.unlockCost.toLocaleString()} to open ${stall.def.name}!`);
       }
       return;
     }
-    this.events.emit("stall-tapped", stall);
+    this.enterFocus(stall);
   }
 
-  // ---------- per-tick interactions ----------
-
-  private zoneActions(): void {
-    const p = this.player;
-    for (const stall of this.stalls) {
-      if (!stall.state.unlocked) continue;
-
-      if (
-        Phaser.Math.Distance.Between(p.x, p.y, stall.grillPos.x, stall.grillPos.y) < 64 &&
-        stall.grillStock > 0 &&
-        p.room(this.state.carryLvl) > 0
-      ) {
-        stall.takeFromGrill(1);
-        p.addItem(stall.def.id, stall.def.foodTex);
-        sfx.pickup();
-        this.tutorialHit(0);
-      }
-
-      if (
-        Phaser.Math.Distance.Between(p.x, p.y, stall.counterPos.x, stall.counterPos.y) < 64 &&
-        stall.counterStock < COUNTER_MAX &&
-        p.takeFor(stall.def.id, 1) > 0
-      ) {
-        stall.depositToCounter(1);
-        sfx.drop();
-        this.tutorialHit(1);
-      }
-
-      if (
-        stall.pileValue > 0 &&
-        Phaser.Math.Distance.Between(p.x, p.y, stall.pilePos.x, stall.pilePos.y) < 60
-      ) {
-        const amount = stall.collectPile(p.x, p.y);
-        this.addMoney(amount);
-        floatMoney(this, stall.pilePos.x, stall.pilePos.y - 10, amount);
-        if (amount >= 60) collectPunch(this);
-        sfx.coin();
-        this.tutorialHit(2);
-      }
+  /** Zoom the camera into a stall and dim the rest; opens its control panel in the UI. */
+  enterFocus(stall: Stall): void {
+    this.mapScrollY = this.cameras.main.scrollY;
+    this.scrollVel = 0;
+    this.focusStall = stall;
+    if (this.cat) this.dismissCat();
+    for (const s of this.stalls) {
+      s.setFocusDim(s !== stall);
+      s.setMapMode(false);
+      s.setFocused(s === stall);
+    }
+    const cam = this.cameras.main;
+    // Centre on the stall's own action area (station + counter + the queue that extends
+    // toward the lane), not the lane centre — otherwise a side stall gets cut off. Frame
+    // it in the upper screen so the slim control bar below never covers it.
+    cam.pan(stall.cx + stall.dir * 80, stall.def.y + 150, CAM_TWEEN_MS, "Sine.easeInOut");
+    cam.zoomTo(FOCUS_ZOOM, CAM_TWEEN_MS, "Sine.easeInOut");
+    this.events.emit("focus-enter", stall);
+    if (!this.state.tutorialDone) {
+      this.events.emit("toast", "Tap the grill to cook 🍳 · counter to serve 🍽️ · cash to collect 💰");
     }
   }
+
+  /** Return to the browsable map, restoring the scroll position you left from. */
+  exitFocus(): void {
+    if (!this.focusStall) return;
+    this.focusStall = null;
+    for (const s of this.stalls) {
+      s.setFocusDim(false);
+      s.setFocused(false);
+      s.setMapMode(true);
+    }
+    const cam = this.cameras.main;
+    cam.zoomTo(MAP_ZOOM, CAM_TWEEN_MS, "Sine.easeInOut");
+    cam.pan(GAME_W / 2, this.mapScrollY + cam.height / MAP_ZOOM / 2, CAM_TWEEN_MS, "Sine.easeInOut");
+    this.events.emit("focus-exit");
+  }
+
+  /** Manual cook: tap to fry one more skewer onto the grill (on top of the idle timer). */
+  cookFocus(): void {
+    const s = this.focusStall;
+    if (!s) return;
+    if (s.cookTap()) sfx.pickup();
+    else sfx.deny();
+  }
+
+  /** Manual serve: serve a tray of waiting customers on a combo for bonus ฿. */
+  serveFocus(): void {
+    const s = this.focusStall;
+    if (!s) return;
+    const frenzied = this.frenzyUntilMs > 0;
+    const onStreak = frenzied || this.time.now - this.lastServeMs < COMBO_WINDOW_MS;
+    const streak = onStreak ? this.combo : 0;
+    // During Frenzy every plate pays a flat ×FRENZY_MULT instead of the combo curve.
+    const mult = frenzied ? FRENZY_MULT : comboMultiplier(streak);
+    const before = s.pileValue;
+    const served = s.serveManual(carryCap(this.state.carryLvl), mult);
+    if (served <= 0) {
+      // Empty tap (queue briefly drained) — keep the combo alive; it only decays after
+      // COMBO_WINDOW_MS of no successful serve (handled in update()).
+      sfx.deny();
+      return;
+    }
+    const gross = Math.round(s.pileValue - before);
+    this.combo = streak + served; // each customer served extends the combo
+    this.bestComboThisGoal = Math.max(this.bestComboThisGoal, this.combo);
+    this.lastServeMs = this.time.now;
+    floatMoney(this, s.counterPos.x, s.counterPos.y - 18, gross);
+    if (gross >= 60) collectPunch(this);
+    sfx.comboTick(this.combo);
+    this.tutorialHint();
+    this.events.emit("combo", this.combo, frenzied ? FRENZY_MULT : comboMultiplier(this.combo));
+    if (!frenzied && this.combo >= FRENZY_COMBO && this.time.now >= this.frenzyReadyAt) {
+      this.startFrenzy();
+    }
+  }
+
+  /** False while the post-frenzy cooldown is running (the HUD meter greys out). */
+  frenzyReady(): boolean {
+    return this.time.now >= this.frenzyReadyAt;
+  }
+
+  /** Manual collect: scoop the focused stall's cash pile. */
+  collectFocus(): void {
+    const s = this.focusStall;
+    if (!s || s.pileValue <= 0) {
+      sfx.deny();
+      return;
+    }
+    const amount = s.collectPile(s.pilePos.x, s.pilePos.y - 40);
+    this.addMoney(amount);
+    floatMoney(this, s.pilePos.x, s.pilePos.y - 10, amount);
+    if (amount >= 60) collectPunch(this);
+    sfx.coin();
+  }
+
+  // ---------- frenzy ----------
+
+  /** Combo hit FRENZY_COMBO: short burst where every manual plate pays ×FRENZY_MULT. */
+  private startFrenzy(): void {
+    this.frenzyUntilMs = this.time.now + FRENZY_MS;
+    this.cameras.main.flash(280, 255, 200, 60, false);
+    collectPunch(this, 0.006);
+    sfx.frenzy();
+    track("frenzy", { stall: this.focusStall?.def.id });
+    this.events.emit("frenzy", true, FRENZY_MS);
+  }
+
+  private endFrenzy(): void {
+    this.frenzyUntilMs = 0;
+    this.frenzyReadyAt = this.time.now + FRENZY_COOLDOWN_MS;
+    this.combo = 0;
+    this.events.emit("combo", 0, 1);
+    this.events.emit("frenzy", false, 0);
+    this.events.emit("toast", "Frenzy over — the wok needs a minute to recharge!");
+  }
+
+  // ---------- tour-bus rush hour ----------
+
+  /** A tour bus floods one stall (the focused one if any) with ×RUSH_MULT customers. */
+  private startRush(): void {
+    const open = this.stalls.filter((s) => s.state.unlocked);
+    if (open.length === 0) return;
+    const stall = this.focusStall ?? Phaser.Math.RND.pick(open);
+    this.rushStall = stall;
+    this.rushEndMs = this.time.now + RUSH_DURATION_MS;
+    stall.rushUntil = Date.now() + RUSH_DURATION_MS;
+    sfx.rush();
+    track("rush_start", { stall: stall.def.id });
+    this.events.emit("rush", stall, RUSH_DURATION_MS);
+    this.events.emit("toast", `🚌 Tour bus! ${stall.def.emoji} ${stall.def.name} pays ×${RUSH_MULT} — serve fast!`);
+  }
+
+  private endRush(): void {
+    if (this.rushStall) this.rushStall.rushUntil = 0;
+    this.rushStall = null;
+    this.nextRushAt = this.time.now + Phaser.Math.Between(RUSH_GAP_MIN_MS, RUSH_GAP_MAX_MS);
+    this.events.emit("rush-end");
+  }
+
+  // ---------- lucky cat ----------
+
+  /** A lucky cat strolls across the visible screen; tap it for a pile of ฿. */
+  private spawnCat(): void {
+    const cam = this.cameras.main;
+    const fromLeft = Phaser.Math.RND.frac() < 0.5;
+    // In focus the upper frame (above the stall sign) is the only clear strip — the cat
+    // crosses there so it never sits over the grill/counter/cash tap zones.
+    const y = this.focusStall
+      ? this.focusStall.def.y - 230 + Phaser.Math.Between(-20, 20)
+      : Phaser.Math.Clamp(cam.scrollY + Phaser.Math.Between(380, 900), 260, WORLD_H - 160);
+    const cat = this.add
+      .text(fromLeft ? -40 : GAME_W + 40, y, "🐈", { fontSize: "46px" })
+      .setOrigin(0.5)
+      .setDepth(7000)
+      .setInteractive({ useHandCursor: true });
+    if (!fromLeft) cat.setFlipX(true);
+    this.cat = cat;
+    this.tweens.add({ targets: cat, y: y - 14, duration: 320, yoyo: true, repeat: -1, ease: "Sine.InOut" });
+    this.tweens.add({
+      targets: cat,
+      x: fromLeft ? GAME_W + 40 : -40,
+      duration: 7000,
+      onComplete: () => this.dismissCat(),
+    });
+    cat.once("pointerdown", () => {
+      const reward = Phaser.Math.Clamp(
+        Math.floor(ratePerSecond(this.stallInfos()) * CAT_REWARD_SEC),
+        CAT_MIN_REWARD,
+        CAT_MAX_REWARD,
+      );
+      this.addMoney(reward);
+      floatMoney(this, cat.x, cat.y - 30, reward);
+      collectPunch(this);
+      sfx.meow();
+      sfx.coin();
+      track("cat_collect", { reward });
+      this.events.emit("toast", "🐈 Lucky cat! Fortune smiles on you.");
+      this.dismissCat();
+    });
+  }
+
+  private dismissCat(): void {
+    if (!this.cat) return;
+    this.tweens.killTweensOf(this.cat);
+    this.cat.destroy();
+    this.cat = null;
+    this.nextCatAt = this.time.now + Phaser.Math.Between(CAT_GAP_MIN_MS, CAT_GAP_MAX_MS);
+  }
+
+  // ---------- food critic ----------
+
+  private onRaveReview(stall: Stall): void {
+    sfx.star();
+    collectPunch(this);
+    track("critic_review", { stall: stall.def.id });
+    this.events.emit("toast", `📰 RAVE REVIEW! ${stall.def.name} pays ×${REVIEW_MULT} for ${REVIEW_MS / 1000}s!`);
+  }
+
+  // ---------- rotating session goals ----------
+
+  /** The in-flight goal plus live progress, for the HUD card (null only before first init). */
+  goalInfo(): { kind: Goal["kind"]; target: number; reward: number; progress: number } | null {
+    const g = this.state.goal;
+    if (!g) return null;
+    return { ...g, progress: Math.min(this.goalProgress(g), g.target) };
+  }
+
+  private ensureGoal(): void {
+    if (this.state.goal) return;
+    this.state.goal = goalForIndex(this.state.goalIdx, ratePerSecond(this.stallInfos()));
+    this.state.goalBase = this.state.goal.kind === "earn" ? this.state.totalEarned : this.state.totalServed;
+  }
+
+  private goalProgress(g: Goal): number {
+    if (g.kind === "serve") return this.state.totalServed - this.state.goalBase;
+    if (g.kind === "earn") return Math.round(this.state.totalEarned - this.state.goalBase);
+    return this.bestComboThisGoal;
+  }
+
+  private tickGoal(): void {
+    const g = this.state.goal;
+    if (!g) return;
+    if (this.goalProgress(g) < g.target) return;
+    this.addMoney(g.reward);
+    sfx.star();
+    track("goal_complete", { idx: this.state.goalIdx, kind: g.kind });
+    this.events.emit("toast", `🎯 Goal complete!  +฿ ${g.reward.toLocaleString()}`);
+    this.state.goalIdx++;
+    this.state.goal = null;
+    this.bestComboThisGoal = 0;
+    this.ensureGoal();
+    saveState(this.state);
+    this.events.emit("goal-done");
+  }
+
+  // ---------- spawning ----------
 
   private spawnCustomer(): void {
     if (this.customers.length >= MAX_CUSTOMERS) return;
     const open = this.stalls.filter((s) => s.state.unlocked && s.queue.length < QUEUE_MAX);
     if (open.length === 0) return;
-    const shortest = Math.min(...open.map((s) => s.queue.length));
-    const stall = Phaser.Math.RND.pick(open.filter((s) => s.queue.length === shortest));
+    // During a rush the tour bus floods one stall; otherwise most customers head for
+    // the stall you're actively running and the rest fill the shortest queue elsewhere.
+    let stall: Stall;
+    const focus = this.focusStall;
+    const rush = this.rushStall;
+    if (rush && rush.queue.length < QUEUE_MAX && Phaser.Math.RND.frac() < 0.85) {
+      stall = rush;
+    } else if (focus && focus.state.unlocked && focus.queue.length < QUEUE_MAX && Phaser.Math.RND.frac() < 0.8) {
+      stall = focus;
+    } else {
+      const shortest = Math.min(...open.map((s) => s.queue.length));
+      stall = Phaser.Math.RND.pick(open.filter((s) => s.queue.length === shortest));
+    }
 
-    const c = new Customer(
-      this,
-      ENTRANCE.x + Phaser.Math.Between(-40, 40),
-      WORLD_H + 30,
-      Phaser.Math.RND.pick(NPC_TINTS),
-    );
+    // Customers for the focused (or rushed) stall appear just below it so they reach the
+    // counter in ~1.5s and a real queue forms to combo-serve; everyone else walks up the
+    // lane from the entrance as usual.
+    const near = stall === this.focusStall || stall === this.rushStall;
+    const spawnX = (near ? LANE_X : ENTRANCE.x) + Phaser.Math.Between(-40, 40);
+    const spawnY = near ? stall.def.y + 440 : WORLD_H + 30;
+    const c = new Customer(this, spawnX, spawnY, Phaser.Math.RND.pick(NPC_TINTS));
+    const roll = Phaser.Math.RND.frac();
+    if (roll < VIP_CHANCE) c.makeVip();
+    else if (roll < VIP_CHANCE + CRITIC_CHANCE) c.makeCritic();
     this.customers.push(c);
     if (stall.join(c) < 0) {
       c.leave(ENTRANCE.x, WORLD_H + 60);
@@ -457,135 +748,53 @@ export class GameScene extends Phaser.Scene {
 
   private startTutorial(): void {
     if (this.state.tutorialDone || this.state.prestige > 0) return;
-    this.tutorialStep = 0;
-    this.tutArrow = this.add.text(0, 0, "👇", { fontSize: "48px" }).setOrigin(0.5).setDepth(5500);
-    this.tutLabel = this.add
-      .text(0, 0, "", {
-        fontFamily: "Arial, sans-serif",
-        fontSize: "22px",
-        fontStyle: "bold",
-        color: "#ffffff",
-        backgroundColor: "#141830ee",
-        padding: { x: 14, y: 8 },
-        align: "center",
-      })
-      .setOrigin(0.5)
-      .setDepth(5500);
-    this.updateTutorialTarget();
+    this.events.emit("toast", "👆 Tap a stall to manage it!");
   }
 
-  private updateTutorialTarget(): void {
-    if (this.tutorialStep < 0 || !this.tutArrow || !this.tutLabel) return;
-    const s = this.stalls[0];
-    const steps = [
-      { p: s.grillPos, t: "Stand at the grill\nto grab food 🍢" },
-      { p: s.counterPos, t: "Carry it to the\ncounter 🛎" },
-      { p: s.pilePos, t: "Scoop up the\ncash! 💰" },
-    ];
-    const cur = steps[this.tutorialStep];
-    this.tweens.killTweensOf(this.tutArrow);
-    this.tutArrow.setPosition(cur.p.x, cur.p.y - 46);
-    this.tutLabel.setPosition(cur.p.x, cur.p.y - 100).setText(cur.t);
-    this.tweens.add({
-      targets: this.tutArrow,
-      y: cur.p.y - 32,
-      duration: 520,
-      yoyo: true,
-      repeat: -1,
-      ease: "Sine.InOut",
-    });
-  }
-
-  private tutorialHit(step: number): void {
-    if (this.tutorialStep !== step) return;
-    this.tutorialStep++;
-    if (this.tutorialStep > 2) {
-      this.finishTutorial();
-      return;
-    }
-    this.updateTutorialTarget();
-  }
-
-  private finishTutorial(): void {
-    this.tutorialStep = -1;
+  /** Mark the loop learned the first time the player serves. */
+  private tutorialHint(): void {
+    if (this.state.tutorialDone) return;
     this.state.tutorialDone = true;
     saveState(this.state);
-    if (this.tutArrow) this.tweens.killTweensOf(this.tutArrow);
-    this.tutArrow?.destroy();
-    this.tutLabel?.destroy();
-    this.tutArrow = undefined;
-    this.tutLabel = undefined;
-    this.events.emit("toast", "Nice — you've got the hang of it! 🎉");
+    this.events.emit("toast", "Nice! Serve customers, then tap 💰 to collect.");
   }
 
   private setupInput(): void {
-    this.cursors = this.input.keyboard!.createCursorKeys();
-    this.wasd = this.input.keyboard!.addKeys("W,A,S,D") as Record<
-      "W" | "A" | "S" | "D",
-      Phaser.Input.Keyboard.Key
-    >;
-
-    // scrollFactor 0 keeps the joystick pinned to the screen as the camera follows.
-    this.joyBaseSpr = this.add
-      .sprite(0, 0, "dot")
-      .setScale(5.8)
-      .setAlpha(0.18)
-      .setTint(0xcfd6ff)
-      .setScrollFactor(0)
-      .setDepth(6000)
-      .setVisible(false);
-    this.joyThumbSpr = this.add
-      .sprite(0, 0, "dot")
-      .setScale(2.6)
-      .setAlpha(0.5)
-      .setTint(0xffd23f)
-      .setScrollFactor(0)
-      .setDepth(6001)
-      .setVisible(false);
-
     this.input.once("pointerdown", () => sfx.unlockAudio());
+    // Back / Escape leaves the focused stall (handy on desktop).
+    this.input.keyboard?.on("keydown-ESC", () => this.exitFocus());
 
-    // Drag anywhere to move — even over a stall. A press only becomes a joystick
-    // once it actually drags (>DRAG_TAP px); a press that doesn't drag stays a tap,
-    // so stalls/UI still open on release. This frees the whole play area for movement.
-    this.input.on(
-      "pointerdown",
-      (p: Phaser.Input.Pointer) => {
-        const ui = this.scene.get("ui");
-        if (ui && ui.input.hitTestPointer(p).length > 0) return; // never start under the HUD
-        this.joyActive = true;
-        this.pointerDragged = false;
-        this.joyBase.set(p.x, p.y);
-        this.joyVec.set(0, 0);
-        // sprites stay hidden until the press becomes a drag (no flash on taps)
-      },
-    );
-    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
-      if (!this.joyActive || !p.isDown) return;
-      const dx = p.x - this.joyBase.x;
-      const dy = p.y - this.joyBase.y;
-      const d = Math.hypot(dx, dy);
-      if (d > 2) {
-        if (!this.joyBaseSpr.visible) {
-          this.joyBaseSpr.setPosition(this.joyBase.x, this.joyBase.y).setVisible(true);
-          this.joyThumbSpr.setVisible(true);
-        }
-        if (d > DRAG_TAP) this.pointerDragged = true;
-        const m = Math.min(d, JOY_RADIUS);
-        this.joyVec.set((dx / d) * (m / JOY_RADIUS), (dy / d) * (m / JOY_RADIUS));
-        this.joyThumbSpr.setPosition(this.joyBase.x + (dx / d) * m, this.joyBase.y + (dy / d) * m);
-      } else {
-        this.joyVec.set(0, 0);
-      }
+    this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      const ui = this.scene.get("ui");
+      if (ui && ui.input.hitTestPointer(p).length > 0) return; // never drag from the HUD
+      this.dragging = true;
+      this.pointerDragged = false;
+      this.lastDragY = p.y;
+      this.scrollVel = 0;
     });
-    const endJoy = () => {
-      this.joyActive = false;
-      this.joyVec.set(0, 0);
-      this.joyBaseSpr.setVisible(false);
-      this.joyThumbSpr.setVisible(false);
+
+    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
+      if (!this.dragging || !p.isDown) return;
+      if (Math.abs(p.y - p.downY) > DRAG_TAP || Math.abs(p.x - p.downX) > DRAG_TAP) {
+        this.pointerDragged = true;
+      }
+      const dy = p.y - this.lastDragY;
+      this.lastDragY = p.y;
+      if (this.focusStall) return; // no scrolling while focused (swipe-down exits on release)
+      const cam = this.cameras.main;
+      cam.scrollY -= dy / cam.zoom; // content follows the finger; bounds clamp it
+      this.scrollVel = -dy / cam.zoom;
+    });
+
+    const end = (p: Phaser.Input.Pointer) => {
+      // A clear downward swipe inside a focused stall pops back to the map.
+      if (this.dragging && this.focusStall && this.pointerDragged) {
+        if (p.y - p.downY > SWIPE_BACK && Math.abs(p.x - p.downX) < 90) this.exitFocus();
+      }
+      this.dragging = false;
     };
-    this.input.on("pointerup", endJoy);
-    this.input.on("pointerupoutside", endJoy);
+    this.input.on("pointerup", end);
+    this.input.on("pointerupoutside", end);
   }
 
   private drawAmbient(): void {
@@ -594,7 +803,7 @@ export class GameScene extends Phaser.Scene {
     bg.fillRect(0, 0, GAME_W, WORLD_H);
 
     // Stars.
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < 40; i++) {
       const star = this.add
         .sprite(Phaser.Math.Between(10, GAME_W - 10), Phaser.Math.Between(10, WORLD_H - 10), "dot")
         .setScale(Phaser.Math.FloatBetween(0.1, 0.22))
@@ -655,7 +864,7 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(0.5)
       .setDepth(-750);
     this.tweens.add({ targets: title, scale: 1.03, duration: 1600, yoyo: true, repeat: -1 });
-    // Tap (not drag) the title to toggle the tuning/stats overlay.
+    // Tap (not scroll) the title to toggle the tuning/stats overlay.
     title.setInteractive({ useHandCursor: true });
     title.on("pointerup", () => {
       if (!this.pointerDragged) this.events.emit("toggle-stats");

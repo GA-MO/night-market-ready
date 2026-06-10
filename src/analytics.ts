@@ -8,7 +8,12 @@ export type AnalyticsEvent =
   | "ad_watched"
   | "prestige"
   | "daily_claim"
-  | "star_earned";
+  | "star_earned"
+  | "rush_start"
+  | "frenzy"
+  | "critic_review"
+  | "cat_collect"
+  | "goal_complete";
 
 export function track(event: AnalyticsEvent, props: Record<string, unknown> = {}): void {
   // eslint-disable-next-line no-console

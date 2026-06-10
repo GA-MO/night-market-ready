@@ -1,4 +1,5 @@
 import { STALLS } from "./config";
+import type { Goal } from "./economy";
 
 export interface StallState {
   unlocked: boolean;
@@ -27,6 +28,12 @@ export interface SaveState {
   prestige: number;
   /** Whether the new-player grill→counter→cash walkthrough has been completed. */
   tutorialDone: boolean;
+  /** How many rotating session goals were completed (drives the next goal's difficulty). */
+  goalIdx: number;
+  /** The in-flight goal (generated once so a rising rate never moves the target). */
+  goal: Goal | null;
+  /** Baseline metric value (totalServed / totalEarned) captured when the goal started. */
+  goalBase: number;
 }
 
 const KEY = "nmr-save-v1";
@@ -52,6 +59,9 @@ export function defaultState(): SaveState {
     lastDailyClaim: "",
     prestige: 0,
     tutorialDone: false,
+    goalIdx: 0,
+    goal: null,
+    goalBase: 0,
   };
 }
 

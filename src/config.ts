@@ -30,6 +30,10 @@ export interface StallDef {
   foodColor: number;
   /** Full-colour food token texture generated in BootScene (not tinted). */
   foodTex: string;
+  /** Distinct cooking-station texture (grill / wok / tea bar / mortar / hotpot). */
+  stationTex: string;
+  /** Whether the station has live flame (ember + steam FX, hot-station look). */
+  hasFire: boolean;
   price: number;
   baseCookMs: number;
   unlockCost: number;
@@ -47,6 +51,8 @@ export const STALLS: StallDef[] = [
     color: 0xff6b35,
     foodColor: 0xa05a2c,
     foodTex: "food_skewer",
+    stationTex: "grill",
+    hasFire: true,
     price: 6,
     baseCookMs: 2400,
     unlockCost: 0,
@@ -62,6 +68,8 @@ export const STALLS: StallDef[] = [
     color: 0xffc145,
     foodColor: 0xf2a541,
     foodTex: "food_noodle",
+    stationTex: "st_wok",
+    hasFire: true,
     price: 11,
     baseCookMs: 3000,
     unlockCost: 300,
@@ -77,6 +85,8 @@ export const STALLS: StallDef[] = [
     color: 0xc77dff,
     foodColor: 0xe07a2f,
     foodTex: "food_tea",
+    stationTex: "st_teabar",
+    hasFire: false,
     price: 16,
     baseCookMs: 3400,
     unlockCost: 1000,
@@ -92,6 +102,8 @@ export const STALLS: StallDef[] = [
     color: 0x90be6d,
     foodColor: 0xbcd35f,
     foodTex: "food_somtam",
+    stationTex: "st_mortar",
+    hasFire: false,
     price: 24,
     baseCookMs: 3800,
     unlockCost: 3000,
@@ -107,6 +119,8 @@ export const STALLS: StallDef[] = [
     color: 0xef6351,
     foodColor: 0xd9534f,
     foodTex: "food_krata",
+    stationTex: "st_krata",
+    hasFire: true,
     price: 34,
     baseCookMs: 4200,
     unlockCost: 8000,

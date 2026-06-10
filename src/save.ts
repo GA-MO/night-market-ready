@@ -25,6 +25,8 @@ export interface SaveState {
   lastDailyClaim: string;
   /** Times the player has prestiged ("moved to the Floating Market"). */
   prestige: number;
+  /** Whether the new-player grill→counter→cash walkthrough has been completed. */
+  tutorialDone: boolean;
 }
 
 const KEY = "nmr-save-v1";
@@ -49,6 +51,7 @@ export function defaultState(): SaveState {
     streak: 0,
     lastDailyClaim: "",
     prestige: 0,
+    tutorialDone: false,
   };
 }
 

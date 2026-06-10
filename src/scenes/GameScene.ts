@@ -53,6 +53,9 @@ export class GameScene extends Phaser.Scene {
   private sessionStartMs = 0;
   private sessionStartEarned = 0;
   private earnBoostUntil = 0;
+  private tutorialStep = -1;
+  private tutArrow?: Phaser.GameObjects.Text;
+  private tutLabel?: Phaser.GameObjects.Text;
   private spawnAcc = 0;
   private actionAcc = 0;
   private saveAcc = 0;
@@ -110,6 +113,7 @@ export class GameScene extends Phaser.Scene {
     track("session_start", { prestige: this.state.prestige, money: this.state.money });
     this.grantOfflineEarnings();
     this.checkDailyStreak();
+    this.startTutorial();
 
     // Sync the HUD (matters after a prestige scene restart — UIScene stays alive).
     this.events.emit("money", this.state.money);
@@ -250,6 +254,7 @@ export class GameScene extends Phaser.Scene {
         stall.takeFromGrill(1);
         p.addItem(stall.def.id, stall.def.foodTex);
         sfx.pickup();
+        this.tutorialHit(0);
       }
 
       if (
@@ -259,6 +264,7 @@ export class GameScene extends Phaser.Scene {
       ) {
         stall.depositToCounter(1);
         sfx.drop();
+        this.tutorialHit(1);
       }
 
       if (
@@ -270,6 +276,7 @@ export class GameScene extends Phaser.Scene {
         floatMoney(this, stall.pilePos.x, stall.pilePos.y - 10, amount);
         if (amount >= 60) collectPunch(this);
         sfx.coin();
+        this.tutorialHit(2);
       }
     }
   }
@@ -437,6 +444,71 @@ export class GameScene extends Phaser.Scene {
     sfx.prestige();
     saveState(this.state);
     this.scene.restart();
+  }
+
+  // ---------- onboarding ----------
+
+  private startTutorial(): void {
+    if (this.state.tutorialDone || this.state.prestige > 0) return;
+    this.tutorialStep = 0;
+    this.tutArrow = this.add.text(0, 0, "👇", { fontSize: "48px" }).setOrigin(0.5).setDepth(5500);
+    this.tutLabel = this.add
+      .text(0, 0, "", {
+        fontFamily: "Arial, sans-serif",
+        fontSize: "22px",
+        fontStyle: "bold",
+        color: "#ffffff",
+        backgroundColor: "#141830ee",
+        padding: { x: 14, y: 8 },
+        align: "center",
+      })
+      .setOrigin(0.5)
+      .setDepth(5500);
+    this.updateTutorialTarget();
+  }
+
+  private updateTutorialTarget(): void {
+    if (this.tutorialStep < 0 || !this.tutArrow || !this.tutLabel) return;
+    const s = this.stalls[0];
+    const steps = [
+      { p: s.grillPos, t: "Stand at the grill\nto grab food 🍢" },
+      { p: s.counterPos, t: "Carry it to the\ncounter 🛎" },
+      { p: s.pilePos, t: "Scoop up the\ncash! 💰" },
+    ];
+    const cur = steps[this.tutorialStep];
+    this.tweens.killTweensOf(this.tutArrow);
+    this.tutArrow.setPosition(cur.p.x, cur.p.y - 46);
+    this.tutLabel.setPosition(cur.p.x, cur.p.y - 100).setText(cur.t);
+    this.tweens.add({
+      targets: this.tutArrow,
+      y: cur.p.y - 32,
+      duration: 520,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.InOut",
+    });
+  }
+
+  private tutorialHit(step: number): void {
+    if (this.tutorialStep !== step) return;
+    this.tutorialStep++;
+    if (this.tutorialStep > 2) {
+      this.finishTutorial();
+      return;
+    }
+    this.updateTutorialTarget();
+  }
+
+  private finishTutorial(): void {
+    this.tutorialStep = -1;
+    this.state.tutorialDone = true;
+    saveState(this.state);
+    if (this.tutArrow) this.tweens.killTweensOf(this.tutArrow);
+    this.tutArrow?.destroy();
+    this.tutLabel?.destroy();
+    this.tutArrow = undefined;
+    this.tutLabel = undefined;
+    this.events.emit("toast", "Nice — you've got the hang of it! 🎉");
   }
 
   private setupInput(): void {

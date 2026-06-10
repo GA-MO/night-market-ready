@@ -2,6 +2,7 @@
 
 class Sfx {
   private ctx: AudioContext | null = null;
+  private ambientStarted = false;
 
   private ensure(): AudioContext | null {
     if (!this.ctx) {
@@ -33,6 +34,55 @@ class Sfx {
   /** Browsers require a user gesture before audio — call from the first pointerdown. */
   unlockAudio(): void {
     this.ensure();
+    this.startAmbient();
+  }
+
+  /** Subtle, looping night-market ambience: a warm pad + a soft crowd bed. */
+  private startAmbient(): void {
+    const ctx = this.ensure();
+    if (!ctx || this.ambientStarted) return;
+    this.ambientStarted = true;
+
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, ctx.currentTime);
+    master.gain.linearRampToValueAtTime(1, ctx.currentTime + 2.5); // gentle fade-in
+    master.connect(ctx.destination);
+
+    // Warm low pad (a few detuned sines).
+    const padGains = [0.01, 0.009, 0.005];
+    [110, 165, 220].forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = f;
+      osc.detune.value = (i - 1) * 5;
+      const g = ctx.createGain();
+      g.gain.value = padGains[i];
+      osc.connect(g).connect(master);
+      osc.start();
+    });
+
+    // Soft "crowd" bed: looping white noise through a low-pass.
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    noise.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 480;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.006;
+    noise.connect(lp).connect(ng).connect(master);
+    noise.start();
+
+    // Slow breathing tremolo on the noise bed for life.
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.08;
+    const lfoG = ctx.createGain();
+    lfoG.gain.value = 0.003;
+    lfo.connect(lfoG).connect(ng.gain);
+    lfo.start();
   }
 
   pickup(): void {

@@ -189,25 +189,19 @@ export class UIScene extends Phaser.Scene {
 
     this.refresh();
 
-    // First-run hint.
+    // "Drag to move" nudge — fades out; the grill→counter→cash walkthrough
+    // (GameScene tutorial arrows) teaches the loop itself for new players.
     const hint = this.add
-      .text(
-        360,
-        210,
-        "Drag anywhere to move\n🔥 grab food at the grill → 🛎 stock the counter → 💰 scoop up the cash!",
-        {
-          fontFamily: "Arial, sans-serif",
-          fontSize: "21px",
-          color: "#cfd6ff",
-          align: "center",
-          wordWrap: { width: 620 },
-        },
-      )
+      .text(360, 250, "Drag anywhere to move", {
+        fontFamily: "Arial, sans-serif",
+        fontSize: "22px",
+        color: "#cfd6ff",
+      })
       .setOrigin(0.5);
     this.tweens.add({
       targets: hint,
       alpha: 0,
-      delay: 8000,
+      delay: 6000,
       duration: 800,
       onComplete: () => hint.destroy(),
     });

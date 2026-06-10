@@ -112,7 +112,7 @@ export class Stall {
       })
       .setOrigin(0.5);
 
-    const grill = this.scene.add.sprite(this.grillPos.x, this.grillPos.y, "grill");
+    const grill = this.scene.add.sprite(this.grillPos.x, this.grillPos.y, def.stationTex);
     const counter = this.scene.add.sprite(this.counterPos.x, this.counterPos.y, "counter");
     this.progressBar = this.scene.add.graphics();
 
@@ -195,7 +195,7 @@ export class Stall {
     this.lockGroup = null;
     this.glow.setVisible(true);
 
-    if (!this.fire) {
+    if (!this.fire && this.def.hasFire) {
       this.fire = grillFire(this.scene, this.grillPos.x, this.grillPos.y + 4, this.def.y - 120);
       steamPlume(this.scene, this.grillPos.x, this.grillPos.y - 16, this.def.y - 110);
     }

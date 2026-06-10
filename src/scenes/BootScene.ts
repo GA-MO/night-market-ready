@@ -321,6 +321,105 @@ export class BootScene extends Phaser.Scene {
       make("grill", 100, 68);
     }
 
+    // ---- station: wok burner (Pad Thai) --------------------------------
+    {
+      g.fillStyle(0x16161f, 1);
+      g.fillRect(18, 52, 7, 14);
+      g.fillRect(76, 52, 7, 14);
+      g.fillStyle(0x2d2d3c, 1); // burner box
+      g.fillRoundedRect(10, 40, 80, 18, 8);
+      for (const fx of [30, 50, 70]) {
+        // flame tongues
+        g.fillStyle(0xff7b1a, 0.9);
+        g.fillTriangle(fx - 7, 44, fx + 7, 44, fx, 28);
+        g.fillStyle(0x9bd0ff, 0.85);
+        g.fillTriangle(fx - 3, 44, fx + 3, 44, fx, 36);
+      }
+      g.fillStyle(0x3c3c50, 1); // wok rim
+      g.fillEllipse(50, 28, 88, 30);
+      g.fillStyle(0x1c1c27, 1); // wok interior
+      g.fillEllipse(50, 30, 78, 25);
+      g.fillStyle(0xffcf6a, 0.35); // oil sheen
+      g.fillEllipse(42, 27, 30, 9);
+      g.fillStyle(0x55556a, 1); // handle
+      g.fillRoundedRect(86, 25, 18, 6, 3);
+      make("st_wok", 108, 68);
+    }
+
+    // ---- station: tea bar (Thai Tea, no fire) --------------------------
+    {
+      g.fillStyle(0x16161f, 1);
+      g.fillRect(16, 54, 7, 12);
+      g.fillRect(78, 54, 7, 12);
+      g.fillStyle(0x565d72, 1); // steel counter
+      g.fillRoundedRect(8, 32, 84, 26, 6);
+      g.fillStyle(0x6e7488, 1); // counter top
+      g.fillRoundedRect(8, 30, 84, 8, 4);
+      g.fillStyle(0x3a3f55, 1); // hanging rail
+      g.fillRect(22, 12, 44, 4);
+      for (const sx of [30, 44, 58]) {
+        // cloth tea socks
+        g.fillStyle(0xcaa86a, 1);
+        g.fillTriangle(sx - 5, 16, sx + 5, 16, sx, 30);
+        g.fillStyle(0xb86a2e, 1);
+        g.fillTriangle(sx - 3, 17, sx + 3, 17, sx, 26);
+      }
+      g.fillStyle(0x9aa0b0, 1); // steel urn
+      g.fillRoundedRect(72, 22, 18, 32, 4);
+      g.fillStyle(0xc2c8d8, 1);
+      g.fillRoundedRect(75, 24, 4, 26, 2);
+      make("st_teabar", 100, 68);
+    }
+
+    // ---- station: mortar & pestle (Som Tam, no fire) -------------------
+    {
+      g.fillStyle(0x16161f, 1);
+      g.fillRect(24, 50, 8, 16);
+      g.fillRect(68, 50, 8, 16);
+      g.fillStyle(0x5b3417, 1); // wooden base ring
+      g.fillRoundedRect(18, 44, 64, 10, 4);
+      g.fillStyle(0x3f3f47, 1); // mortar outer
+      g.slice(50, 28, 30, 0, Math.PI, false);
+      g.fillPath();
+      g.fillStyle(0x55555f, 1); // mortar inner wall
+      g.slice(50, 28, 25, 0, Math.PI, false);
+      g.fillPath();
+      g.fillStyle(0x2b2b31, 1); // opening rim
+      g.fillEllipse(50, 28, 54, 12);
+      g.fillStyle(0xc9d65a, 1); // papaya
+      g.fillEllipse(50, 28, 34, 7);
+      g.fillStyle(0xe5532f, 1);
+      g.fillCircle(44, 27, 2);
+      g.fillCircle(58, 29, 2);
+      g.lineStyle(7, 0xb98a55, 1); // pestle
+      g.lineBetween(58, 30, 86, 6);
+      g.fillStyle(0xd9b27e, 1);
+      g.fillCircle(87, 6, 6);
+      make("st_mortar", 100, 68);
+    }
+
+    // ---- station: domed hotpot brazier (Moo Krata) ---------------------
+    {
+      g.fillStyle(0x16161f, 1);
+      g.fillRect(22, 52, 8, 14);
+      g.fillRect(70, 52, 8, 14);
+      g.fillStyle(0x2d2d3c, 1); // brazier bucket
+      g.fillRoundedRect(14, 36, 72, 24, { tl: 6, tr: 6, bl: 14, br: 14 });
+      radial(50, 44, 28, 0xff8a2a, 0x3a1304, 12); // coals glow
+      g.fillStyle(0x23232f, 1); // broth moat
+      g.fillEllipse(50, 30, 82, 16);
+      g.fillStyle(0xc98a3a, 0.6);
+      g.fillEllipse(50, 30, 72, 11);
+      radial(50, 24, 26, 0x9aa0b0, 0x3a3a48, 12); // metal dome
+      g.fillStyle(0x6b3320, 1); // meat on dome
+      g.fillCircle(42, 20, 3.5);
+      g.fillCircle(56, 22, 3.5);
+      g.fillCircle(50, 15, 3);
+      g.fillStyle(0xffffff, 0.25); // dome gloss
+      g.fillEllipse(44, 14, 14, 5);
+      make("st_krata", 100, 68);
+    }
+
     // ---- serving counter (wood) ----------------------------------------
     // 112×54, origin-centred.
     {

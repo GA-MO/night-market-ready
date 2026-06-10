@@ -79,18 +79,36 @@ export class Stall {
     const base = this.scene.add.graphics();
     base.fillStyle(0x1c1f3a, 1);
     base.fillRoundedRect(cx - BASE_W / 2, def.y - BASE_H / 2, BASE_W, BASE_H, 14);
-    base.lineStyle(3, def.color, 0.5);
+    // colour-tinted top band so the stall body reads its identity colour, not just the awning
+    base.fillStyle(def.color, 0.16);
+    base.fillRoundedRect(cx - BASE_W / 2, def.y - BASE_H / 2, BASE_W, 46, { tl: 14, tr: 14, bl: 0, br: 0 });
+    base.lineStyle(3, def.color, 0.85);
     base.strokeRoundedRect(cx - BASE_W / 2, def.y - BASE_H / 2, BASE_W, BASE_H, 14);
 
     const awningY = def.y - BASE_H / 2 - 14;
     const awningBase = this.scene.add.sprite(cx, awningY, "awning_base").setTint(0xf4f1ea);
     const awningStripes = this.scene.add.sprite(cx, awningY, "awning_stripes").setTint(def.color);
+
+    // Hanging sign board: dark plaque + colour-coded border keeps the name crisp
+    // under bloom and gives each stall a clear identity (vs. samey striped awnings).
+    const signY = def.y - 50;
+    const signW = 200;
+    const signH = 44;
+    const sign = this.scene.add.graphics();
+    sign.fillStyle(0x0e1126, 0.95);
+    sign.fillRoundedRect(cx - signW / 2, signY - signH / 2, signW, signH, 12);
+    sign.lineStyle(3, def.color, 1);
+    sign.strokeRoundedRect(cx - signW / 2, signY - signH / 2, signW, signH, 12);
+    // colour accent strip down the left of the sign
+    sign.fillStyle(def.color, 1);
+    sign.fillRoundedRect(cx - signW / 2 + 6, signY - signH / 2 + 8, 8, signH - 16, 4);
+    const emoji = this.scene.add.text(cx - signW / 2 + 30, signY, def.emoji, { fontSize: "26px" }).setOrigin(0, 0.5);
     const name = this.scene.add
-      .text(cx, awningY - 6, `${def.emoji} ${def.name}`, {
+      .text(cx + 12, signY, def.name, {
         fontFamily: "Arial, sans-serif",
         fontSize: "23px",
         fontStyle: "bold",
-        color: "#1a1a2e",
+        color: "#ffffff",
       })
       .setOrigin(0.5);
 
@@ -130,6 +148,8 @@ export class Stall {
       base,
       awningBase,
       awningStripes,
+      sign,
+      emoji,
       name,
       grill,
       counter,

@@ -9,7 +9,8 @@ export function applyCameraFx(scene: Phaser.Scene): void {
   if (scene.game.renderer.type !== Phaser.WEBGL) return;
   const fx = scene.cameras.main.postFX;
   fx.addVignette(0.5, 0.5, 0.82, 0.4);
-  fx.addBloom(0xffffff, 1, 1, 1, 0.85, 6);
+  // Gentler bloom: keeps the lantern/coin glow but stops washing out text & signage.
+  fx.addBloom(0xffffff, 1, 1, 0.9, 0.55, 5);
 }
 
 /** Warm fireflies drifting through the market. */

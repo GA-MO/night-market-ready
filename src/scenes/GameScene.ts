@@ -331,7 +331,7 @@ export class GameScene extends Phaser.Scene {
     saveState(this.state);
     this.events.emit("toast", `⭐ ${stall.def.name} hit ${stars}★ — permanent +${stars * 10}% price!`);
     this.events.emit("state-changed");
-    sfx.unlock();
+    sfx.star();
   }
 
   private grantOfflineEarnings(): void {
@@ -434,6 +434,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.earnBoostUntil = 0;
     track("prestige", { prestige: this.state.prestige });
+    sfx.prestige();
     saveState(this.state);
     this.scene.restart();
   }

@@ -246,6 +246,50 @@ export class BootScene extends Phaser.Scene {
       make("food_krata", 30, 30);
     }
 
+    // ---- customer cosmetics (origin-centred; cap is white → tintable) --
+    // Conical straw hat.
+    {
+      g.fillStyle(0x6b4a22, 1); // brim shade
+      g.fillEllipse(20, 22, 38, 11);
+      g.fillStyle(0xd9b56b, 1); // brim
+      g.fillEllipse(20, 21, 34, 9);
+      g.fillTriangle(8, 21, 32, 21, 20, 4); // cone
+      g.fillStyle(0xe8cb8c, 1);
+      g.fillTriangle(12, 20, 20, 20, 18, 7); // cone highlight
+      make("acc_straw", 40, 30);
+    }
+    // Top hair bun.
+    {
+      g.fillStyle(0x241b2e, 1);
+      g.slice(20, 24, 13, Math.PI, Math.PI * 2, false); // hair cap (top half)
+      g.fillPath();
+      g.fillCircle(20, 8, 6); // bun
+      g.fillStyle(0x3a2c44, 1);
+      g.fillCircle(18, 6, 2.2); // bun highlight
+      make("acc_bun", 40, 30);
+    }
+    // Baseball cap (white base; tinted per customer).
+    {
+      g.fillStyle(0xffffff, 1);
+      g.slice(20, 20, 12, Math.PI, Math.PI * 2, false); // dome
+      g.fillPath();
+      g.fillEllipse(30, 20, 16, 6); // brim
+      g.fillStyle(0xdddddd, 1);
+      g.fillCircle(20, 9, 1.6); // button
+      make("acc_cap", 40, 30);
+    }
+    // Round glasses.
+    {
+      g.lineStyle(2.5, 0x2a2233, 1);
+      g.strokeCircle(11, 8, 6);
+      g.strokeCircle(29, 8, 6);
+      g.lineBetween(17, 8, 23, 8); // bridge
+      g.fillStyle(0xbfe6ff, 0.35); // lens glint
+      g.fillCircle(11, 8, 5);
+      g.fillCircle(29, 8, 5);
+      make("acc_glasses", 40, 16);
+    }
+
     // ---- grill ----------------------------------------------------------
     // 100×68, origin-centred.
     {
@@ -256,14 +300,16 @@ export class BootScene extends Phaser.Scene {
       g.fillRoundedRect(4, 6, 92, 54, 12);
       g.fillStyle(0x3c3c50, 1);
       g.fillRoundedRect(8, 10, 84, 30, 8); // coal pit rim
-      // glowing coals
-      radial(50, 26, 40, 0xffb13a, 0x401505, 18);
-      g.fillStyle(0xff7b1a, 0.5);
-      g.fillEllipse(34, 26, 22, 12);
-      g.fillEllipse(66, 26, 22, 12);
+      // glowing coal bed — flat ellipses (reads as a grill, not a bowl/wok)
+      for (let i = 12; i >= 1; i--) {
+        const f = i / 12;
+        g.fillStyle(lerp(0xffb13a, 0x3a1304, (i - 1) / 11), 1);
+        g.fillEllipse(50, 25, 82 * f, 26 * f);
+      }
       g.fillStyle(0xffe08a, 0.6);
-      g.fillCircle(42, 24, 4);
-      g.fillCircle(60, 28, 3);
+      g.fillCircle(40, 23, 3.5);
+      g.fillCircle(58, 27, 2.6);
+      g.fillCircle(68, 22, 2);
       // grill bars
       g.fillStyle(0x52525f, 1);
       for (let x = 14; x <= 86; x += 9) g.fillRoundedRect(x, 10, 3, 30, 1.5);

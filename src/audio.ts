@@ -60,6 +60,14 @@ class Sfx {
     [392, 523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.12, "triangle", 0.05, i * 0.08));
   }
 
+  star(): void {
+    [659, 880, 1047, 1319].forEach((f, i) => this.tone(f, 0.1, "triangle", 0.05, i * 0.07));
+  }
+
+  prestige(): void {
+    [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => this.tone(f, 0.14, "triangle", 0.05, i * 0.08));
+  }
+
   deny(): void {
     this.tone(160, 0.12, "sawtooth", 0.04);
   }

@@ -21,7 +21,22 @@ export class Customer {
   ) {
     const shadow = scene.add.ellipse(0, 16, 30, 11, 0x000000, 0.3);
     const body = scene.add.sprite(0, 0, "npc").setTint(tint);
-    this.obj = scene.add.container(x, y, [shadow, body]);
+    const parts: Phaser.GameObjects.GameObject[] = [shadow, body];
+
+    // Cosmetic variety so the crowd doesn't look like clones.
+    const rnd = Phaser.Math.RND;
+    if (rnd.frac() < 0.7) {
+      const key = rnd.pick(["acc_straw", "acc_bun", "acc_cap"]);
+      const hat = scene.add.sprite(0, key === "acc_bun" ? -20 : -19, key).setScale(0.92);
+      if (key === "acc_cap") hat.setTint(rnd.pick([0xef6351, 0x4895ef, 0xffd23f, 0x90be6d, 0xff70a6]));
+      parts.push(hat);
+    }
+    if (rnd.frac() < 0.3) {
+      parts.push(scene.add.sprite(0, -3, "acc_glasses").setScale(0.8));
+    }
+
+    this.obj = scene.add.container(x, y, parts);
+    this.obj.setScale(rnd.realInRange(0.9, 1.12));
     this.obj.setDepth(y);
   }
 

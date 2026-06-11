@@ -31,9 +31,15 @@ export const COMBO_STEP = 0.1;
 export const COMBO_MAX = 10;
 /** Chance a spawned customer is a paying VIP, and the payout multiplier they give. */
 export const VIP_CHANCE = 0.12;
-export const VIP_MULT = 4;
+export const VIP_MULT = 3;
 /** Without a hired helper a stall still plates one item this often (keeps it from bleeding). */
 export const BASE_AUTOPLATE_MS = 2600;
+
+/** Cook-time progress added per grill tap (ms). Tapping FANS THE FLAME — it speeds the
+ *  current item up, it never conjures one. This keeps the cook rate (and the Cook
+ *  upgrade) the real throughput ceiling: the human playtest found that instant +1-per-tap
+ *  cooking turned focus mode into a money faucet limited only by finger speed. */
+export const COOK_TAP_BOOST_MS = 400;
 
 // ---------- fun events (rush hour / frenzy / critic / lucky cat / goals) ----------
 

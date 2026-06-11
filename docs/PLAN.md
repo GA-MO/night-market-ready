@@ -101,6 +101,23 @@ human plays at roughly half this throughput.
 - [ ] Remaining for the human 10-min gate: rave uptime feel, goal mid-game pacing,
   whether ฿/min growth makes prestige (+25%) feel earned rather than farmed.
 
+## Status — Human playtest verdict #1: "money is a faucet" (2026-06-11)
+
+First real-player verdict on the deployed build: *"enter a stall, tap-tap-tap combo,
+money pours in, unlocked everything in no time — boring."* Root cause: the grill tap
+CONJURED an item (+1 stock, free, instant), so serveManual's grill-fallback made income
+limited only by finger speed — every cook upgrade, timer and scarcity system was bypassed.
+- [x] **Cook tap reworked: stoke, don't conjure.** `cookTap` now adds `COOK_TAP_BOOST_MS`
+  (400ms) of cook progress (leftover carries into the next item). Hammering ≈2× idle cook
+  rate; throughput is genuinely cook-limited, the Cook upgrade is the real income lever,
+  and counter-spam with an empty grill just denies. The balance-guard model (cook-limited
+  ceiling × overhead) is now an accurate description of active play again.
+- [x] `VIP_MULT` 4→3 (one less silent multiplier in the stack).
+- Bot delta (same 3-min protocol): ฿/min 7.7k→4.9k (-36%); humans fall further since the
+  old loop needed no skill. Pad Thai 54s · Thai Tea 150s · frenzy ×3 · 0 lost sales.
+- [ ] Get a second human verdict: does the cook-limited loop create enough decisions
+  (stoke vs serve vs collect), or does it need demand-side pressure too (patience/queue)?
+
 ## Status — DONE (2026-06-10)
 
 - [x] Core loop: grill → carry → counter → customers pay → cash pile → collect

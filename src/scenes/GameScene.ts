@@ -345,7 +345,7 @@ export class GameScene extends Phaser.Scene {
     cam.zoomTo(FOCUS_ZOOM, CAM_TWEEN_MS, "Sine.easeInOut");
     this.events.emit("focus-enter", stall);
     if (!this.state.tutorialDone) {
-      this.events.emit("toast", "Tap the grill to cook 🍳 · counter to serve 🍽️ · cash to collect 💰");
+      this.events.emit("toast", "Tap the grill to stoke the fire 🔥 · counter to serve 🍽️ · cash to collect 💰");
     }
   }
 

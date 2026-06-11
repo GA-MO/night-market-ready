@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import {
   BASE_AUTOPLATE_MS,
+  COOK_TAP_BOOST_MS,
   COUNTER_MAX,
   GAME_W,
   GRILL_MAX,
@@ -530,14 +531,20 @@ export class Stall {
   }
 
   /**
-   * Manual "cook" action (focus mode): fry one more item straight onto the grill, on
-   * top of the idle cook timer. Returns false if the grill is already full.
+   * Manual "cook" action (focus mode): fan the flame — add COOK_TAP_BOOST_MS of cook
+   * progress to the item on the grill. Tapping speeds cooking up (~2× idle when
+   * hammering) but never conjures an item, so throughput stays cook-limited and the
+   * Cook upgrade remains the real lever. Returns false if the grill is already full.
    */
   cookTap(): boolean {
     if (this.grillStock >= GRILL_MAX) return false;
-    this.cookProgress = 0;
-    this.grillStock++;
-    this.refreshGrill();
+    this.cookProgress += COOK_TAP_BOOST_MS;
+    const need = cookMs(this.def.baseCookMs, this.state.cookLvl);
+    if (this.cookProgress >= need) {
+      this.cookProgress -= need; // leftover heat carries into the next item
+      this.grillStock++;
+      this.refreshGrill();
+    }
     return true;
   }
 
